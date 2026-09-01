@@ -1,4 +1,4 @@
-# thesis-teleop-app
+# teleop-app
 
 手機語音遙操作碩論的 Web App 前端（Thomas）。已完成 Sprint 1 的 App 骨架與 rule-based 按鈕介面：連線狀態、WebSocket client、信封格式（介面協定 v0）、六方向＋夾爪＋粗微調按鈕、ack 回饋。
 
