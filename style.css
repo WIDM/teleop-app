@@ -1,0 +1,131 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, "PingFang TC", "Noto Sans TC", sans-serif;
+  background: #111;
+  color: #eee;
+  padding: 12px;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+h1 {
+  font-size: 1.2rem;
+}
+
+.status {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+.status.disconnected {
+  background: #555;
+}
+.status.connected {
+  background: #1a7f37;
+}
+.status.reconnecting {
+  background: #b45309;
+}
+
+.conn {
+  margin-bottom: 12px;
+}
+
+#serverUrl {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #444;
+  background: #1c1c1c;
+  color: #eee;
+  font-size: 1rem;
+  margin-bottom: 8px;
+}
+
+.conn-btns,
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+button {
+  flex: 1;
+  padding: 12px;
+  font-size: 1rem;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+}
+button:disabled {
+  background: #333;
+  color: #777;
+}
+#disconnectBtn {
+  background: #7f1d1d;
+}
+#disconnectBtn:disabled {
+  background: #333;
+}
+
+.log-wrap {
+  border-top: 1px solid #333;
+  padding-top: 8px;
+}
+
+.log-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.log-head button {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  background: #444;
+}
+
+#log {
+  list-style: none;
+  font-size: 0.75rem;
+}
+#log li {
+  padding: 6px 0;
+  border-bottom: 1px solid #222;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+#log .dir {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+#log .dir.out {
+  background: #1e3a8a;
+}
+#log .dir.in {
+  background: #14532d;
+}
+#log .time {
+  flex: 0 0 auto;
+  color: #888;
+}
+#log code {
+  word-break: break-all;
+}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <title>Teleop App v0</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Teleop v0</h1>
+      <div id="status" class="status disconnected">未連</div>
+    </header>
+
+    <section class="conn">
+      <input
+        id="serverUrl"
+        type="text"
+        inputmode="url"
+        autocapitalize="off"
+        placeholder="ws://192.168.x.x:8765"
+      />
+      <div class="conn-btns">
+        <button id="connectBtn">連線</button>
+        <button id="disconnectBtn" disabled>斷線</button>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button id="helloBtn" disabled>送 hello</button>
+      <button id="testBtn" disabled>送 test</button>
+    </section>
+
+    <section class="log-wrap">
+      <div class="log-head">
+        <span>訊息紀錄</span>
+        <button id="clearBtn">清空</button>
+      </div>
+      <ul id="log"></ul>
+    </section>
+
+    <script src="app.js"></script>
+  </body>
+</html>
