@@ -42,6 +42,10 @@ function setState(next) {
   $("disconnectBtn").disabled = !wantConnected;
   $("helloBtn").disabled = !connected;
   $("testBtn").disabled = !connected;
+  document
+    .querySelectorAll(".move, .grip, .mode")
+    .forEach((b) => (b.disabled = !connected));
+  if (!connected) pendingAck.clear();
 }
 
 const LOG_MAX = 200; // 手機端只留最近 200 則，避免高頻訊息撐爆 DOM
@@ -94,8 +98,22 @@ function connect() {
 
   ws.onmessage = (ev) => {
     // 協定只走 JSON 純文字；binary frame 直接標示不解析
-    if (typeof ev.data === "string") addLog("in", ev.data);
-    else addLog("in", "(忽略非文字 frame)");
+    if (typeof ev.data !== "string") {
+      addLog("in", "(忽略非文字 frame)");
+      return;
+    }
+    addLog("in", ev.data);
+    let msg;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+    if (msg.type === "ack") handleAck(msg.payload);
+    if (msg.type === "welcome" && msg.payload?.config) {
+      stepConfig = msg.payload.config;
+      updateModeBtn();
+    }
   };
 
   ws.onclose = () => {
@@ -139,6 +157,58 @@ $("helloBtn").onclick = () =>
 $("testBtn").onclick = () => send("test", { msg: "hello" });
 $("clearBtn").onclick = () => {
   logEl.innerHTML = "";
+};
+
+// ===== rule-based 按鈕介面（A-2）=====
+let currentStep = "coarse"; // 目前步長，mode 訊息切換
+let stepConfig = null; // welcome 帶來的 {coarse_cm, fine_cm}
+const pendingAck = new Map(); // seq → 發出該指令的按鈕
+
+function sendTracked(btn, type, payload) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const msg = makeEnvelope(type, payload);
+  pendingAck.set(msg.seq, btn);
+  ws.send(JSON.stringify(msg));
+  addLog("out", JSON.stringify(msg));
+}
+
+function handleAck(p) {
+  const btn = pendingAck.get(p?.seq);
+  pendingAck.delete(p?.seq);
+  if (!btn) return;
+  const cls = p.status === "ok" ? "flash-ok" : "flash-bad";
+  btn.classList.remove("flash-ok", "flash-bad");
+  void btn.offsetWidth; // 重新觸發 CSS 動畫
+  btn.classList.add(cls);
+  if (p.status !== "ok")
+    addLog("in", `指令被拒（seq ${p.seq}）：${p.reason || p.status}`);
+}
+
+function updateModeBtn() {
+  const cm = stepConfig
+    ? `（${currentStep === "coarse" ? stepConfig.coarse_cm : stepConfig.fine_cm} cm）`
+    : "";
+  $("modeBtn").textContent = (currentStep === "coarse" ? "粗調" : "微調") + cm;
+}
+
+document.querySelectorAll(".move").forEach((btn) => {
+  btn.onclick = () =>
+    sendTracked(btn, "move_delta", {
+      axis: btn.dataset.axis,
+      dir: Number(btn.dataset.dir),
+      step: currentStep,
+    });
+});
+
+$("gripOpenBtn").onclick = () =>
+  sendTracked($("gripOpenBtn"), "gripper", { action: "open" });
+$("gripCloseBtn").onclick = () =>
+  sendTracked($("gripCloseBtn"), "gripper", { action: "close" });
+
+$("modeBtn").onclick = () => {
+  currentStep = currentStep === "coarse" ? "fine" : "coarse";
+  updateModeBtn();
+  sendTracked($("modeBtn"), "mode", { step: currentStep });
 };
 
 setState(STATE.DISCONNECTED);

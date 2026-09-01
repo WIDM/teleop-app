@@ -81,6 +81,62 @@ button:disabled {
   background: #333;
 }
 
+.pad {
+  margin-bottom: 12px;
+}
+
+.pad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pad-grid .move {
+  padding: 18px 0;
+  font-size: 1.1rem;
+  background: #374151;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.pad-grid .move small {
+  font-size: 0.65rem;
+  color: #9ca3af;
+}
+
+.pad-row {
+  display: flex;
+  gap: 8px;
+}
+.pad-row .grip {
+  background: #0f766e;
+}
+.pad-row .mode {
+  background: #6d28d9;
+}
+.pad-row button {
+  padding: 14px 0;
+}
+
+button.flash-ok {
+  animation: flashOk 0.4s;
+}
+button.flash-bad {
+  animation: flashBad 0.6s;
+}
+@keyframes flashOk {
+  50% {
+    background: #16a34a;
+  }
+}
+@keyframes flashBad {
+  50% {
+    background: #dc2626;
+  }
+}
+
 .log-wrap {
   border-top: 1px solid #333;
   padding-top: 8px;

@@ -7,10 +7,22 @@ import time
 import websockets
 
 
+CONTROL_TYPES = {"move_delta", "gripper", "mode", "estop", "estop_reset"}
+
+
 async def handle(ws):
     async for raw in ws:
         msg = json.loads(raw)
-        if msg.get("type") == "hello":
+        if msg.get("type") in CONTROL_TYPES:
+            reply = {
+                "v": 0,
+                "type": "ack",
+                "ts": int(time.time() * 1000),
+                "seq": msg["seq"],
+                "payload": {"seq": msg["seq"], "status": "ok"},
+            }
+            await ws.send(json.dumps(reply))
+        elif msg.get("type") == "hello":
             reply = {
                 "v": 0,
                 "type": "welcome",
