@@ -4,18 +4,24 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, user-scalable=no"
+      content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#111" />
     <title>Teleop App v0</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <header>
-      <h1>Teleop v0</h1>
-      <div id="status" class="status disconnected">未連</div>
+    <header class="top">
+      <div class="top-left">
+        <h1>Teleop</h1>
+        <span id="status" class="status disconnected">未連</span>
+      </div>
+      <span id="gate" class="gate blocked">未連線</span>
     </header>
 
-    <section class="conn">
+    <details class="conn" open>
+      <summary>連線設定</summary>
       <input
         id="serverUrl"
         type="text"
@@ -23,52 +29,88 @@
         autocapitalize="off"
         placeholder="ws://192.168.x.x:8765"
       />
-      <div class="conn-btns">
+      <div class="row">
         <button id="connectBtn">連線</button>
-        <button id="disconnectBtn" disabled>斷線</button>
+        <button id="disconnectBtn" class="secondary" disabled>斷線</button>
       </div>
-    </section>
+    </details>
 
-    <section class="actions">
-      <button id="helloBtn" disabled>送 hello</button>
-      <button id="testBtn" disabled>送 test</button>
-    </section>
+    <button id="estopBtn" class="estop" disabled>急停 STOP</button>
 
-    <section class="pad">
-      <div class="pad-grid">
-        <button class="move" data-axis="x" data-dir="1" disabled>
-          前<small>x＋</small>
-        </button>
-        <button class="move" data-axis="z" data-dir="1" disabled>
-          上<small>z＋</small>
-        </button>
-        <button class="move" data-axis="y" data-dir="1" disabled>
-          左<small>y＋</small>
-        </button>
-        <button class="move" data-axis="x" data-dir="-1" disabled>
-          後<small>x−</small>
-        </button>
-        <button class="move" data-axis="z" data-dir="-1" disabled>
-          下<small>z−</small>
-        </button>
-        <button class="move" data-axis="y" data-dir="-1" disabled>
-          右<small>y−</small>
-        </button>
-      </div>
-      <div class="pad-row">
-        <button id="gripOpenBtn" class="grip" disabled>夾爪 開</button>
-        <button id="gripCloseBtn" class="grip" disabled>夾爪 關</button>
-        <button id="modeBtn" class="mode" disabled>粗調</button>
-      </div>
-    </section>
+    <main class="controls">
+      <section class="block">
+        <div class="pad">
+          <div class="dpad">
+            <span></span>
+            <button class="hold move" data-axis="y" data-dir="-1" disabled>
+              前<small>y−</small>
+            </button>
+            <span></span>
+            <button class="hold move" data-axis="x" data-dir="1" disabled>
+              左<small>x＋</small>
+            </button>
+            <span class="dpad-center"></span>
+            <button class="hold move" data-axis="x" data-dir="-1" disabled>
+              右<small>x−</small>
+            </button>
+            <span></span>
+            <button class="hold move" data-axis="y" data-dir="1" disabled>
+              後<small>y＋</small>
+            </button>
+            <span></span>
+          </div>
+          <div class="zcol">
+            <button class="hold move" data-axis="z" data-dir="1" disabled>
+              上<small>z＋</small>
+            </button>
+            <button class="hold move" data-axis="z" data-dir="-1" disabled>
+              下<small>z−</small>
+            </button>
+          </div>
+        </div>
+      </section>
 
-    <section class="log-wrap">
-      <div class="log-head">
-        <span>訊息紀錄</span>
-        <button id="clearBtn">清空</button>
+      <section class="block">
+        <div class="group">
+          <div class="group-label">手腕</div>
+          <div class="row">
+            <button class="hold wrist" data-dir="1" disabled>
+              ↑<small>flex＋</small>
+            </button>
+            <button class="hold wrist" data-dir="-1" disabled>
+              ↓<small>flex−</small>
+            </button>
+          </div>
+        </div>
+        <div class="group">
+          <div class="group-label">夾爪</div>
+          <div class="row">
+            <button class="hold grip" data-action="open" disabled>開</button>
+            <button class="hold grip" data-action="close" disabled>關</button>
+          </div>
+        </div>
+        <div class="row tools">
+          <button id="modeBtn" class="mode" disabled>微調</button>
+          <button id="resetSceneBtn" class="secondary" disabled>
+            重置場景
+          </button>
+          <button id="estopResetBtn" class="estop-reset" disabled>
+            解除急停
+          </button>
+        </div>
+        <div id="stateBar" class="state-bar">尚未收到 state</div>
+      </section>
+    </main>
+
+    <details class="debug">
+      <summary>訊息紀錄與測試</summary>
+      <div class="row">
+        <button id="helloBtn" class="secondary" disabled>送 hello</button>
+        <button id="testBtn" class="secondary" disabled>送 test</button>
+        <button id="clearBtn" class="secondary">清空紀錄</button>
       </div>
       <ul id="log"></ul>
-    </section>
+    </details>
 
     <script src="app.js"></script>
   </body>
