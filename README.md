@@ -4,6 +4,7 @@
 
 - 訊息格式合約：《介面協定 v0 Message Schema》（已凍結 2026-09-02，改版走 PR）＋ press-and-hold 擴充：[docs/hold-protocol.md](docs/hold-protocol.md)（Leo 2026-09-09）
 - 純靜態頁，無 build 步驟；`stub_server.py` 是本地測試用的假 server
+- `orientation.html`：手機姿態 demo（Euler 角與四元數），要用 `python serve_https.py` 開（感測器只給 HTTPS 頁面），手機開 `https://<電腦IP>:8443/orientation.html`，憑證警告按「仍要前往」。給學習票 K-1 與十月陀螺儀票用
 
 ## Demo SOP
 
