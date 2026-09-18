@@ -18,9 +18,13 @@ Reads data/**/*.parquet plus meta/info.json and writes one CSV row per episode:
 
 Join key for other per-episode logs (robot-side counters etc.) is `episode_index`.
 
+Column choice when --key is omitted: observation.state if it has end-effector
+columns; otherwise the first feature whose name contains `ee_pose`/`eef_pose`
+(e.g. observation.ee_pose); otherwise observation.state joint angles.
+
 Usage:
     python quality_metrics.py <dataset_root> [-o metrics.csv]
-    python quality_metrics.py <root> --key observation.state --dims ee_x,ee_y,ee_z
+    python quality_metrics.py <root> --key observation.ee_pose --dims ee_x,ee_y,ee_z
     python quality_metrics.py <root> --dims 0,1,2 --smooth 5
 """
 
@@ -37,6 +41,9 @@ import pandas as pd
 
 # Name fragments that mark end-effector position columns, checked in order.
 EE_NAME_HINTS = ("ee_pos", "eef_pos", "ee_", "eef_")
+# Feature-name fragments for a separate end-effector pose feature.
+EE_FEATURE_HINTS = ("ee_pose", "eef_pose")
+DEFAULT_KEY = "observation.state"
 CSV_COLUMNS = [
     "episode_index",
     "n_frames",
@@ -64,9 +71,7 @@ def load_dataset(root: Path) -> tuple[dict, pd.DataFrame]:
     return info, df
 
 
-def resolve_dims(
-    info: dict, key: str, dims_arg: str | None
-) -> tuple[list[int], list[str]]:
+def feature_names(info: dict, key: str) -> list[str]:
     feature = info.get("features", {}).get(key)
     if feature is None:
         sys.exit(
@@ -76,7 +81,30 @@ def resolve_dims(
     names = feature.get("names") or [str(i) for i in range(width)]
     if isinstance(names, dict):  # some datasets store {"motors": [...]}
         names = next(iter(names.values()))
-    names = [str(n) for n in names]
+    return [str(n) for n in names]
+
+
+def has_ee_columns(names: list[str]) -> bool:
+    return any(h in n.lower() for h in EE_NAME_HINTS for n in names)
+
+
+def choose_key(info: dict, key_arg: str | None) -> str:
+    """--key wins; else state with EE columns; else a separate *ee_pose feature."""
+    if key_arg:
+        return key_arg
+    features = info.get("features", {})
+    if DEFAULT_KEY in features and has_ee_columns(feature_names(info, DEFAULT_KEY)):
+        return DEFAULT_KEY
+    for name in features:
+        if any(h in name.lower() for h in EE_FEATURE_HINTS):
+            return name
+    return DEFAULT_KEY
+
+
+def resolve_dims(
+    info: dict, key: str, dims_arg: str | None
+) -> tuple[list[int], list[str]]:
+    names = feature_names(info, key)
 
     if dims_arg:
         idx = []
@@ -94,6 +122,17 @@ def resolve_dims(
         idx = [i for i, n in enumerate(names) if hint in n.lower()]
         if idx:
             return idx[:3], [names[i] for i in idx[:3]]
+    if any(h in key.lower() for h in EE_FEATURE_HINTS):
+        # Named pose columns such as x, y, z, qw...: pick x, y, z by name.
+        lower = [n.lower() for n in names]
+        if all(a in lower for a in ("x", "y", "z")):
+            idx = [lower.index(a) for a in ("x", "y", "z")]
+            return idx, [names[i] for i in idx]
+        # Unnamed pose columns: position is the first three (quaternion follows).
+        if not info["features"][key].get("names") and len(names) >= 3:
+            return [0, 1, 2], names[:3]
+        # Named but unrecognised: guessing could mix quaternion into path length.
+        sys.exit(f"{key} 的欄名 {names} 認不出位置欄，用 --dims 指定三個位置欄")
     # No end-effector columns: fall back to every non-gripper dim (joint-space jerk).
     idx = [i for i, n in enumerate(names) if "gripper" not in n.lower()]
     if not idx:
@@ -180,7 +219,7 @@ def episode_metrics(
 
 def compute(
     root: Path,
-    key: str,
+    key: str | None,
     dims_arg: str | None,
     smooth: int,
     pause_speed: float,
@@ -189,6 +228,7 @@ def compute(
 ) -> pd.DataFrame:
     info, df = load_dataset(root)
     fps = float(info["fps"])
+    key = choose_key(info, key)
     idx, dim_names = resolve_dims(info, key, dims_arg)
     rows = []
     for ep, g in df.sort_values(["episode_index", "frame_index"]).groupby(
@@ -217,7 +257,9 @@ def main() -> None:
     )
     ap.add_argument("-o", "--out", type=Path, default=Path("metrics.csv"))
     ap.add_argument(
-        "--key", default="observation.state", help="要算的欄位，預設 observation.state"
+        "--key",
+        default=None,
+        help="要算的欄位；不給就自動選：state 有 EE 欄用 state，否則找 *ee_pose 欄，再沒有才用 state 關節角",
     )
     ap.add_argument(
         "--dims",
@@ -253,7 +295,8 @@ def main() -> None:
     out.to_csv(args.out, index=False)
     with pd.option_context("display.width", 160, "display.max_columns", None):
         print(out.drop(columns=["key"]).round(4).to_string(index=False))
-    print(f"\n{len(out)} episodes → {args.out}")
+    used = out["key"].iloc[0] if len(out) else args.key
+    print(f"\n{len(out)} episodes → {args.out}（欄位 {used}）")
 
 
 if __name__ == "__main__":
