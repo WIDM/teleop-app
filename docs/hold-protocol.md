@@ -19,7 +19,7 @@ Every text message uses this envelope:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "hello",
   "ts": 1788940000000,
   "seq": 1,
@@ -38,7 +38,7 @@ The first message must be:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "hello",
   "ts": 1788940000000,
   "seq": 1,
@@ -58,7 +58,7 @@ On `pointerDown`/`touchDown`, send exactly one `jog_start`:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "jog_start",
   "ts": 1788940000100,
   "seq": 2,
@@ -91,7 +91,7 @@ every 150 ms:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "jog_keepalive",
   "ts": 1788940000250,
   "seq": 3,
@@ -107,7 +107,7 @@ focus, immediately send:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "jog_stop",
   "ts": 1788940000400,
   "seq": 4,
@@ -121,7 +121,7 @@ Press and hold:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "joint_jog_start",
   "ts": 1788940001000,
   "seq": 10,
@@ -144,7 +144,7 @@ Press and hold Open or Close:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "gripper_jog_start",
   "ts": 1788940002000,
   "seq": 20,
@@ -178,7 +178,7 @@ server's displayed mode:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "mode",
   "ts": 1788940003000,
   "seq": 30,
@@ -207,7 +207,7 @@ An ACK has this form:
 
 ```json
 {
-  "v": 0,
+  "v": 1,
   "type": "ack",
   "ts": 1788940003100,
   "seq": 30,
@@ -248,19 +248,19 @@ enable or block motion controls. Unknown future state fields must be ignored.
 Scene reset:
 
 ```json
-{"v":0,"type":"reset_scene","ts":1788940004000,"seq":40,"payload":{}}
+{"v":1,"type":"reset_scene","ts":1788940004000,"seq":40,"payload":{}}
 ```
 
 Emergency stop:
 
 ```json
-{"v":0,"type":"estop","ts":1788940004100,"seq":41,"payload":{}}
+{"v":1,"type":"estop","ts":1788940004100,"seq":41,"payload":{}}
 ```
 
 Reset emergency stop only after the server has frozen motion:
 
 ```json
-{"v":0,"type":"estop_reset","ts":1788940004200,"seq":42,"payload":{}}
+{"v":1,"type":"estop_reset","ts":1788940004200,"seq":42,"payload":{}}
 ```
 
 If the controlling WebSocket disconnects during an active command, the server
