@@ -1,5 +1,5 @@
 // ===== 信封工具：所有訊息共用（介面協定 v0 ＋ hold 擴充 2026-09-09）=====
-const PROTOCOL_VERSION = 0;
+const PROTOCOL_VERSION = 1;
 let seq = 0; // 全程遞增、不重用（含 keepalive 與 stop）
 
 function makeEnvelope(type, payload = {}) {

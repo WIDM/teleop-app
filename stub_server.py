@@ -28,7 +28,7 @@ def now_ms():
 
 def envelope(type_, seq, payload):
     return json.dumps(
-        {"v": 0, "type": type_, "ts": now_ms(), "seq": seq, "payload": payload}
+        {"v": 1, "type": type_, "ts": now_ms(), "seq": seq, "payload": payload}
     )
 
 
