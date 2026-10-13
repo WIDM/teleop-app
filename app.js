@@ -142,12 +142,15 @@ function escapeHtml(s) {
 
 // ===== 4. 送出與 ack 對帳 =====
 // send 是所有訊息的唯一出口：包信封、送出、寫紀錄。socket 沒開就回 null，什麼都不做。
-// quiet＝不寫進紀錄；keepalive 每 150 ms 一則，寫了會洗版。
+// quiet＝高頻訊息，平常不寫進紀錄（keepalive 每 150 ms、orient_update 每 33 ms，寫了會洗版）；
+// 勾「顯示高頻訊息」時照寫，除錯用。
+const showHighFreq = () => $("showHighFreq").checked;
+
 function send(type, payload, { quiet = false } = {}) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return null;
   const msg = makeEnvelope(type, payload);
   ws.send(JSON.stringify(msg));
-  if (!quiet) addLog("out", JSON.stringify(msg));
+  if (!quiet || showHighFreq()) addLog("out", JSON.stringify(msg));
   return msg.seq;
 }
 
@@ -332,7 +335,8 @@ function connect() {
     }
     if (msg.type === "state") {
       handleState(msg.payload || {});
-      return; // 每秒五則，不進紀錄，顯示在狀態列
+      if (showHighFreq()) addLog("in", ev.data);
+      return; // 每秒五則，平常不進紀錄，顯示在狀態列
     }
     addLog("in", ev.data);
     if (msg.type === "ack") handleAck(msg.payload);

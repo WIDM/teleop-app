@@ -325,6 +325,14 @@ button.flash-bad {
   padding: 8px;
   font-size: 0.85rem;
 }
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 #log {
   list-style: none;
   font-size: 0.72rem;
