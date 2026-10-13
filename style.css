@@ -245,6 +245,37 @@ button.estop:active:not(:disabled) {
 .grip {
   background: #0f766e;
 }
+/* 姿態模式：左邊要權限，右邊是離合器（按住才生效） */
+.sensor {
+  flex: 1;
+  font-size: 0.9rem;
+}
+.orient {
+  flex: 2;
+  padding: 14px;
+  background: #7c3aed;
+}
+.orient-params {
+  margin: 8px 0 0;
+  padding: 6px 0 0;
+}
+.orient-params label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.orient-params input {
+  width: 90px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #444;
+  background: #111;
+  color: var(--text);
+  font-size: 1rem;
+}
 .tools button {
   padding: 12px 6px;
   font-size: 0.9rem;

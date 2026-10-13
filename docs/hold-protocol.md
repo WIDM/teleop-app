@@ -161,6 +161,79 @@ Press and hold Open or Close:
 - Closing may stop automatically when contact is detected. The App must then
   clear its pressed state and stop sending keepalives.
 
+## Orientation (IMU) mode — DRAFT, pending Leo
+
+Status: proposed by Thomas 2026-10-13. The App and `stub_server.py` implement
+it; Leo's server does not yet. Field names may change after review.
+
+The phone controls end-effector **orientation only**. Translation stays on the
+jog buttons, because position integrated from a phone IMU drifts. Holding the
+"按住轉手機" button acts as a clutch: orientation is engaged only while held.
+It is a held control like the others: only one held control at a time, and
+every release, cancel, background, blur, disconnect, or estop ends it.
+
+On press, send `orient_start`. The App records the phone attitude `q0` at this
+instant; the server should record the end-effector attitude `e0` at the same
+time.
+
+```json
+{
+  "v": 1,
+  "type": "orient_start",
+  "ts": 1788940005000,
+  "seq": 50,
+  "payload": {
+    "frame": "phone_body",
+    "rate_hz": 30,
+    "gain": 0.7,
+    "deadband_deg": 2.5,
+    "smoothing": 0.3
+  }
+}
+```
+
+`gain`, `deadband_deg`, and `smoothing` are already applied by the App. They
+are sent so the server can log them as experiment parameters.
+
+While held, send `orient_update` about every 33 ms (30 Hz). It also serves as
+the keepalive: no `jog_keepalive` is sent in this mode, and the 750 ms
+watchdog applies to `orient_update`. The App does not wait for ACKs and the
+server should not ACK updates.
+
+```json
+{
+  "v": 1,
+  "type": "orient_update",
+  "ts": 1788940005033,
+  "seq": 51,
+  "payload": {"q_rel": [0.1672, 0.0, 0.0, 0.98592]}
+}
+```
+
+- `q_rel` is a unit quaternion `[x, y, z, w]` equal to `q0⁻¹ · q`: the
+  rotation since the press, expressed in the phone's own axes at press time
+  (W3C DeviceOrientation: x to the screen's right, y to the screen's top, z out
+  of the screen). The first update after a press is the identity.
+- The App has already applied deadband, gain, and exponential smoothing.
+- The App stops and sends `orient_stop` if the phone sensor produces no data
+  for 300 ms.
+
+Server side (proposal):
+
+- Target attitude: `e_target = e0 · R · q_rel · R⁻¹`, where `R` is a fixed
+  rotation aligning phone axes to the robot base frame.
+- SO-101 has 5 joints, so project the 3-axis rotation: pitch → `wrist_flex`,
+  roll → `wrist_roll`, yaw → ignored for now (or base rotation). The
+  projection rule goes in the thesis.
+- If IK fails, hold the last reachable pose and report it in `state.ik`.
+
+On release send `orient_stop` with `{}` payload. ACKs follow the same release
+sequence as the jog buttons: the stop's ACK (`orient_stop_requested`), then
+the start's final ACK (`orient_stopped`, or `orient_watchdog_timeout`).
+
+The stub additionally reports `orient_deg` (the rotation angle of the latest
+`q_rel`) in `state` for debugging. It is not part of the proposed contract.
+
 ## Step modes and current speeds
 
 | Control | fine | coarse |
