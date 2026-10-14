@@ -10,6 +10,22 @@
 2. **HTTPS＋wss 轉接**：手機只在 HTTPS 頁面給陀螺儀資料，而 HTTPS 頁面不能連 `ws://`。所以 `serve_https.py` 在同一個 port 8443 同時提供頁面和 `wss://…/relay`，把訊息原封不動轉給你的 `ws://` server。**你的 server 不用支援 TLS。**
 3. **`xr-test.html`**：WebXR 6 自由度追蹤測試頁，評估 AR 對照組用的，跟你的 server 無關。
 
+## 整條連線長什麼樣子
+
+```
+iPhone Safari ─https/wss─▶ 你的 Mac：serve_https.py（:8443）─ws─▶ 你的 Mac relay（:8765）─▶ Isaac Sim（SO-101 S4）
+```
+
+- 只多了 `serve_https.py` 這一層，跑在你的 Mac 上，跟 relay 同一台。它也是透明轉發，訊息原封不動，所以 **relay 不用改**。
+- 要改的是 Isaac Sim 那端（真正處理訊息、算 IK 的地方）：收 `v=1`、處理 `orient_*`。
+- relay 只收一條手機連線，從 relay 看來，`serve_https.py` 就是那一條。
+
+## 手機要裝什麼
+
+**什麼都不用裝，iPhone 內建的 Safari 就可以。** 按鈕模式和姿態模式都用 Safari。
+
+XR Browser 只有測 `xr-test.html`（AR 對照組的 WebXR 追蹤測試）才需要，因為 Safari 沒有 WebXR AR。這跟這次的對接無關，可以先跳過。
+
 ## 你的 server 要改的
 
 | 項目 | 現況 | 要改成 |
@@ -58,19 +74,20 @@ open "$(mkcert -CAROOT)"
 - 把開出來的資料夾裡的 **`rootCA.pem`** 用 AirDrop 傳到 iPhone。**不要傳 `rootCA-key.pem`**，那是私鑰。
 - iPhone：「設定 → 一般 → VPN 與裝置管理」安裝描述檔，再到「設定 → 一般 → 關於本機 → 憑證信任設定」把 mkcert 那一項打開。
 - 換網路、IP 變了，就重跑 `mkcert -cert-file …` 那一行。手機上的根憑證不用重裝。
-- 確認方法：Safari 開 `https://<你電腦IP>:8443/`，網址列有鎖頭就成功了。
+- 確認方法：iPhone 用 Safari 開 `https://<你電腦IP>:8443/`，網址列有鎖頭就成功了。
 
 ### 3. 啟動
 
-```bash
-# 終端機 1：你的 server，照常開在 8765
-# （還沒改好之前，可以先用 python3 stub_server.py 代替）
+1. 照平常開 Isaac Sim 和你 Mac 上的 relay（:8765）。**不要開 Mac 鍵盤控制器。**
+2. 在 teleop-app 目錄開一個終端機：
 
-# 終端機 2：頁面＋wss 轉接，預設轉給本機 ws://127.0.0.1:8765
-python3 serve_https.py
-```
+   ```bash
+   python3 serve_https.py
+   ```
 
-你的 server 不在本機的話，改成 `python3 serve_https.py --upstream ws://<IP>:8765`。
+   預設轉給本機的 `ws://127.0.0.1:8765`，也就是你的 relay。relay 不在這台 Mac 上的話，改成 `python3 serve_https.py --upstream ws://<relay IP>:8765`。
+
+Isaac Sim 那邊還沒改好之前，可以先把 relay 和 Isaac Sim 換成 `python3 stub_server.py`（它也開在 :8765），把手機、憑證和網頁這一段先跑通。
 
 ### 4. 手機
 
