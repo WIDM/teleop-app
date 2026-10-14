@@ -1,6 +1,6 @@
 // app.js：手機端遙操作 App 的全部邏輯，單一檔案。
 //
-// 讀法：照下面九個區塊的順序讀，每一區開頭都有一段白話說明。
+// 讀法：照下面十個區塊的順序讀，每一區開頭都有一段白話說明。
 //   1. 信封工具        每則訊息共用的外層格式
 //   2. 連線狀態與閘門  三種連線狀態、什麼時候才允許按方向鍵
 //   3. 畫面與紀錄      狀態列、按鈕啟停、訊息紀錄
@@ -10,6 +10,7 @@
 //   7. state 廣播      server 每秒五次回報手臂狀態，急停閘門靠它
 //   8. 按鈕綁定        把上面的機制接到畫面上的每一顆按鈕
 //   9. 姿態模式（IMU） 按住「姿態」鈕時，用手機轉動控制末端轉向
+//  10. AR 模式（WebXR）按住控制區時，手機移動帶動整隻手臂，拇指上下滑控制夾爪
 //
 // 兩條主線貫穿全檔，讀的時候盯著這兩條走：
 //   連線生命週期：開頁 → 按連線 → onopen 送 hello → 收 welcome → 收 state → 閘門打開
@@ -89,6 +90,10 @@ function updateButtons() {
     .querySelectorAll(".hold, .mode, #resetSceneBtn")
     .forEach((b) => (b.disabled = !motion));
   $("orientBtn").disabled = !motion || !sensor.enabled;
+  $("arClutch").disabled = !motion || !xr.session;
+  $("arStartBtn").disabled = !xr.supported || !!xr.session;
+  $("arEstopBtn").disabled = !connected;
+  $("arEstopResetBtn").disabled = !(connected && estopActive === true);
   $("estopBtn").disabled = !connected;
   $("estopResetBtn").disabled = !(connected && estopActive === true);
   const gate = $("gate");
@@ -664,6 +669,197 @@ bindHold(
 );
 
 $("sensorBtn").onclick = enableSensor;
+
+// ===== 10. AR 模式（WebXR）：手機移動帶動整隻手臂 =====
+// 陀螺儀只量得到轉向；WebXR 用相機＋慣性感測追蹤，量得到手機移動了多遠（6 自由度）。
+// iPhone 的 Safari 沒有 WebXR AR，要用 XRViewer 開；Android 用 Chrome。做法同 TidyBot++。
+//   進入 AR：整頁換成 #arOverlay，疊在相機畫面上（dom-overlay），只留急停、結束、控制區。
+//   離合器：按住控制區才生效。按下那一刻記住手機位置 p0、姿態 q0；放開就斷開，每次按下重新歸零。
+//   每 33 ms 送 pose_update（兼 keepalive）：
+//     p_rel_m        p − p0，公尺，WebXR local 座標（x 右、y 上、z 朝後，以進入 AR 時手機的朝向為準）
+//     q_rel          q0⁻¹·q，跟姿態模式同一個定義與處理（死區、增益、平滑沿用姿態參數）
+//     gripper_delta  按住時拇指上滑為正（開）、下滑為負（關），滑螢幕高度 20% 就是 ±1
+//   座標對到手臂、位移倍率、工作空間與速度限制、IK 失敗處理都由 server 做（Leo 2026-10-14）。
+// 另外三種情況也算失去控制，走 endHold 送 stop：追蹤遺失或 300 ms 沒新姿態、手機突然動太快
+// （門檻同 COBALT：每 50 ms 超過 4 cm 或 0.2 rad，例如手機掉落）、AR 被結束。
+const POSE_INTERVAL_MS = 33;
+const POSE_STALE_MS = 300;
+const MAX_SPEED_MPS = 0.04 / 0.05;
+const MAX_ANG_SPEED_DPS = 0.2 / 0.05 / D2R;
+const GRIP_FULL_SWIPE = 0.2;
+
+let xr = { supported: false, session: null, pose: null, t: 0 }; // pose：{p 公尺, q xyzw}
+let arHold = null; // 按住中：{p0, q0, out, params, grip, y0, last}
+
+function showArInfo(text) {
+  $("arInfo").textContent = text;
+}
+
+function poseFresh() {
+  return xr.pose !== null && performance.now() - xr.t < POSE_STALE_MS;
+}
+
+async function checkXrSupport() {
+  try {
+    xr.supported =
+      !!navigator.xr && (await navigator.xr.isSessionSupported("immersive-ar"));
+  } catch {
+    xr.supported = false;
+  }
+  $("arSupport").textContent = xr.supported
+    ? "這個瀏覽器支援"
+    : "這個瀏覽器不支援（iPhone 用 XRViewer 開，Android 用 Chrome）";
+  updateButtons();
+}
+
+async function startAR() {
+  const overlay = $("arOverlay");
+  overlay.hidden = false;
+  let session;
+  try {
+    // dom-overlay 列為選用：XRViewer 比這個規格早，它是把整個網頁直接畫在相機畫面上，
+    // 不一定回報 dom-overlay；列成必要的話 XRViewer 會開不了（TidyBot++ 也是這樣用）
+    session = await navigator.xr.requestSession("immersive-ar", {
+      requiredFeatures: ["local"],
+      optionalFeatures: ["dom-overlay"],
+      domOverlay: { root: overlay },
+    });
+  } catch (err) {
+    overlay.hidden = true;
+    addLog("sys", `開不了 AR：${err.message}`);
+    return;
+  }
+  xr.session = session;
+  // 沒有 dom-overlay 時，overlay 改成不透明蓋住主畫面，避免底下的按鈕透出來混淆
+  overlay.classList.toggle("opaque", !session.domOverlayState);
+  // WebXR 要有 WebGL 圖層才會跑畫格；不畫東西，每格清成透明讓相機畫面透出來
+  const gl = document
+    .createElement("canvas")
+    .getContext("webgl", { xrCompatible: true });
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  const space = await session.requestReferenceSpace("local");
+  session.addEventListener("end", () => {
+    if (hold) endHold({ reason: "AR 結束，已送 stop" });
+    xr.session = null;
+    xr.pose = null;
+    overlay.hidden = true;
+    updateButtons();
+  });
+  const onFrame = (t, frame) => {
+    if (!xr.session) return;
+    session.requestAnimationFrame(onFrame);
+    gl.bindFramebuffer(
+      gl.FRAMEBUFFER,
+      session.renderState.baseLayer.framebuffer,
+    );
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    const pose = frame.getViewerPose(space);
+    if (!pose || pose.emulatedPosition) {
+      xr.pose = null; // 下一個 tick 會因為沒有新姿態而停
+      showArInfo("追蹤遺失：對著有紋理、光線夠的地方");
+      return;
+    }
+    const { position: p, orientation: o } = pose.transform;
+    xr.pose = { p: [p.x, p.y, p.z], q: [o.x, o.y, o.z, o.w] };
+    xr.t = performance.now();
+    if (!arHold) showArInfo("追蹤中，按住下方區域開始控制");
+  };
+  session.requestAnimationFrame(onFrame);
+  showArInfo("等待追蹤…慢慢移動手機");
+  updateButtons();
+}
+
+function canStartAr() {
+  if (!xr.session || !poseFresh()) {
+    showArInfo("還沒追蹤到，先慢慢移動手機");
+    return false;
+  }
+  arHold = {
+    p0: xr.pose.p,
+    q0: xr.pose.q,
+    out: IDENTITY,
+    params: readOrientParams(),
+    grip: 0,
+    y0: null,
+    last: { p: xr.pose.p, q: xr.pose.q, t: xr.t },
+  };
+  return true;
+}
+
+function arTick() {
+  if (!arHold) return;
+  if (!poseFresh()) {
+    endHold({ reason: "AR 追蹤中斷，已送 stop" });
+    return;
+  }
+  const { p, q } = xr.pose;
+  const last = arHold.last;
+  if (xr.t > last.t) {
+    const dt = (xr.t - last.t) / 1000;
+    const speed = Math.hypot(...p.map((v, i) => v - last.p[i])) / dt;
+    const angSpeed = qAngleDeg(qMul(qConj(last.q), q)) / dt;
+    if (speed > MAX_SPEED_MPS || angSpeed > MAX_ANG_SPEED_DPS) {
+      endHold({
+        reason: `手機動太快（${speed.toFixed(2)} m/s、${angSpeed.toFixed(0)}°/s），已送 stop`,
+      });
+      return;
+    }
+    arHold.last = { p, q, t: xr.t };
+  }
+  const p_rel_m = p.map((v, i) => Number((v - arHold.p0[i]).toFixed(4)));
+  const target = shapeRel(qMul(qConj(arHold.q0), q), arHold.params);
+  arHold.out = qSlerp(arHold.out, target, 1 - arHold.params.smoothing);
+  const q_rel = arHold.out.map((v) => Number(v.toFixed(5)));
+  const gripper_delta = Number(arHold.grip.toFixed(3));
+  send("pose_update", { p_rel_m, q_rel, gripper_delta }, { quiet: true });
+  const cm = p_rel_m.map((v) => (v * 100).toFixed(1)).join(", ");
+  $("arReadout").textContent =
+    `位移(cm) ${cm}｜轉 ${qAngleDeg(arHold.out).toFixed(1)}°｜夾爪 ${gripper_delta >= 0 ? "+" : ""}${gripper_delta.toFixed(2)}`;
+}
+
+const arClutch = $("arClutch");
+bindHold(
+  arClutch,
+  "pose_start",
+  "pose_stop",
+  () => ({ frame: "webxr_local", rate_hz: 30, ...arHold.params }),
+  {
+    canStart: canStartAr,
+    tick: arTick,
+    intervalMs: POSE_INTERVAL_MS,
+    onEnd: () => {
+      arHold = null;
+      $("arReadout").textContent = "";
+      if (xr.session) showArInfo(poseFresh() ? "已放開" : "追蹤中斷");
+    },
+  },
+);
+
+// 拇指滑夾爪：只認開始按住的那根手指；上滑為正（開）
+arClutch.addEventListener("pointerdown", (e) => {
+  if (arHold && hold && hold.btn === arClutch) arHold.y0 = e.clientY;
+});
+arClutch.addEventListener("pointermove", (e) => {
+  if (!arHold || arHold.y0 === null || !hold || e.pointerId !== hold.pointerId)
+    return;
+  const d = (arHold.y0 - e.clientY) / (window.innerHeight * GRIP_FULL_SWIPE);
+  arHold.grip = Math.max(-1, Math.min(1, d));
+});
+
+// 點 overlay 上的按鈕不要被 WebXR 當成在 AR 場景裡點擊
+$("arOverlay").addEventListener("beforexrselect", (e) => e.preventDefault());
+
+// AR 畫面上的急停：跟主畫面那顆一樣，按下就送
+$("arEstopBtn").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (!$("arEstopBtn").disabled) fireEstop();
+});
+$("arEstopResetBtn").onclick = () =>
+  sendTracked($("arEstopResetBtn"), "estop_reset", {});
+$("arExitBtn").onclick = () => xr.session?.end();
+$("arStartBtn").onclick = startAR;
+checkXrSupport();
 
 updateModeBtn();
 setState(STATE.DISCONNECTED);

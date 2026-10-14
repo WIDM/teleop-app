@@ -4,6 +4,36 @@
 
 分支：`claude/elegant-hopper-shmlgp`，還沒併進 `main`。
 
+## 第二輪（2026-10-14 晚）：AR 模式 `pose_*`，回應你的測試回報
+
+你提的 `pose_start`／`pose_update`／`pose_stop` 已經照你的格式做進 App，`git pull` 就拿得到。完整格式見 [hold-protocol.md](hold-protocol.md) 的「Pose (WebXR AR) mode — DRAFT」一節。
+
+**照你的提議做的：**
+
+- 按住控制區那一刻當原點；按住期間約 30 Hz 送 `pose_update`，同時當 keepalive，沿用 750 ms 看門狗、不逐筆 ack；放開送 `pose_stop`。
+- `p_rel_m`：`p − p0`，公尺，**WebXR `local` 原始座標**（x 右、y 上、z 朝後；以進入 AR 那一刻手機鏡頭的方向為 −z）。對到 base frame、位移倍率、工作空間與速度限制，照你說的由你處理。
+- `q_rel`：跟 `orient_update` 的 `q_rel` 定義與處理完全一樣，所以你已經校正好的兩軸手腕對應可以直接沿用。
+- 按鈕模式、陀螺儀模式都保留。
+
+**我加的，請你確認：**
+
+- **`gripper_delta`**（範圍 −1 到 1）：按住控制區時拇指往上滑為正（開）、往下滑為負（關），滑螢幕高度的 20% 就是 ±1。建議你在 `pose_start` 記下當時的夾爪位置，再加上 `gripper_delta`，夾在上下限內。做法同 TidyBot++。
+- **App 端自動停**（送 `pose_stop`）：追蹤遺失或 300 ms 沒有新姿態；手機突然動得比 0.8 m/s 或 229°/s 快（門檻同 COBALT，例如手機掉落）；AR 被結束。
+- AR 畫面上有急停、解除急停、結束 AR 三顆按鈕，不用離開 AR 就能急停和解除。
+
+**手機怎麼開：** iPhone 用 **XRViewer** 開 `https://<你Mac IP>:8443/`（同一個網址，不是 `xr-test.html`），連線後按「進入 AR 模式」。Safari 沒有 WebXR AR，所以 AR 模式一定要用 XRViewer；按鈕模式和陀螺儀模式照舊用 Safari 就好。
+
+**你的鏈路多了 SSH tunnel :8766 也沒關係**：`serve_https.py` 只要能連到你的 relay（:8765）就好，後面怎麼接都不影響。
+
+**AR 模式驗收：**
+
+- [ ] XRViewer 開頁面，「進入 AR 模式」可以按，按下去看到相機畫面和控制區
+- [ ] 按住控制區、手機往前移 10 cm，手臂末端也往前移（方向對不對要你校正）
+- [ ] 按住時拇指上下滑，夾爪會開、會關
+- [ ] 放開就停；按住時按 AR 畫面上的急停，立刻停，不再收到 `pose_update`
+- [ ] 按住時手機快速甩一下，App 自動送 `pose_stop`，紀錄有「手機動太快」
+- [ ] 按住時用手遮住鏡頭（追蹤遺失），300 ms 內自動停
+
 ## 這次 App 改了什麼
 
 1. **姿態模式（陀螺儀）**：按住「按住轉手機」時，用手機轉動控制末端轉向；平移照舊用方向鍵。新增三個訊息 `orient_start`／`orient_update`／`orient_stop`，格式見 [hold-protocol.md](hold-protocol.md) 的「Orientation (IMU) mode — DRAFT」一節。**這是草案，請你看過再定。**
@@ -23,9 +53,9 @@ iPhone Safari ─https/wss─▶ 你的 Mac：serve_https.py（:8443）─ws─�
 
 ## 手機要裝什麼
 
-**什麼都不用裝，iPhone 內建的 Safari 就可以。** 按鈕模式和姿態模式都用 Safari。
+按鈕模式和姿態模式用 iPhone 內建的 Safari 就可以。
 
-XR Browser 只有測 `xr-test.html`（AR 對照組的 WebXR 追蹤測試）才需要，因為 Safari 沒有 WebXR AR。這跟這次的對接無關，可以先跳過。
+只有 **AR 模式**（以及 `xr-test.html`）要用 XRViewer 開，因為 Safari 沒有 WebXR AR。
 
 ## 你的 server 要改的
 

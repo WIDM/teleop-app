@@ -52,6 +52,16 @@
 
 安全行為跟方向鍵一致：一次只能按住一個、放開／背景／失焦／斷線／急停都會送 `orient_stop`；另外陀螺儀 300 ms 沒資料也會自動停。
 
+## AR 模式（WebXR，手機移動帶動整隻手臂）
+
+同一個頁面，用支援 WebXR AR 的瀏覽器開才會亮起「進入 AR 模式」：iPhone 用 XRViewer，Android 用 Chrome（Safari 沒有 WebXR AR）。啟動方式同姿態模式（`serve_https.py`），手機開 `https://<電腦IP>:8443/`，連線後按「進入 AR 模式」。
+
+- 按住控制區：手機移動，手臂末端跟著動（IK 帶動整隻手臂）；放開即停
+- 按住時拇指往上滑＝夾爪開、往下滑＝夾爪關（滑螢幕高度 20% 為全開或全關）
+- AR 畫面上有急停、解除急停、結束 AR
+- 追蹤遺失、手機突然動太快（例如掉落）、AR 被結束都會自動送 `pose_stop`
+- 協定：`pose_start`／`pose_update`／`pose_stop`，見 [docs/hold-protocol.md](docs/hold-protocol.md) 的 Pose 一節
+
 ## WebXR 追蹤測試（AR 對照組可行性）
 
 `xr-test.html`：確認手機＋瀏覽器拿不拿得到 6 自由度姿態（位置＋轉向），做法同 TidyBot++（WebXR `immersive-ar`）。照姿態模式的步驟開 `serve_https.py`，手機開 `https://<電腦IP>:8443/xr-test.html`。iPhone 要用 XR Browser 類的 App（Safari 沒有 WebXR AR），Android 用 Chrome。按「開始 AR」後，按住紫色區把手機直直移 20 cm，看「距離」準不準。

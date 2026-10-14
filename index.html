@@ -114,6 +114,16 @@
       </section>
 
       <section class="block">
+        <div class="group-label">
+          AR（WebXR，手機移動帶動整隻手臂；iPhone 用 XRViewer，Android 用
+          Chrome）
+        </div>
+        <button id="arStartBtn" class="ar-start" disabled>
+          進入 AR 模式<small id="arSupport">檢查中…</small>
+        </button>
+      </section>
+
+      <section class="block">
         <div class="group">
           <div class="group-label">手腕</div>
           <div class="row">
@@ -154,10 +164,27 @@
       </div>
       <label class="toggle">
         <input id="showHighFreq" type="checkbox" />
-        顯示高頻訊息（keepalive、orient_update、state）
+        顯示高頻訊息（keepalive、orient_update、pose_update、state）
       </label>
       <ul id="log"></ul>
     </details>
+
+    <!-- AR 模式開啟後只顯示這一層（WebXR dom-overlay），疊在相機畫面上 -->
+    <div id="arOverlay" hidden>
+      <div class="ar-top">
+        <span id="arInfo">AR 未開始</span>
+        <button id="arEstopResetBtn" class="estop-reset" disabled>
+          解除急停
+        </button>
+        <button id="arExitBtn" class="secondary">結束 AR</button>
+      </div>
+      <button id="arEstopBtn" class="estop">急停 STOP</button>
+      <button id="arClutch" class="hold ar-clutch" disabled>
+        按住：手機移動帶動手臂
+        <small>按住時拇指往上滑＝夾爪開，往下滑＝夾爪關</small>
+        <small id="arReadout"></small>
+      </button>
+    </div>
 
     <script src="app.js"></script>
   </body>

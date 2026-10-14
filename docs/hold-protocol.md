@@ -234,6 +234,85 @@ the start's final ACK (`orient_stopped`, or `orient_watchdog_timeout`).
 The stub additionally reports `orient_deg` (the rotation angle of the latest
 `q_rel`) in `state` for debugging. It is not part of the proposed contract.
 
+## Pose (WebXR AR) mode — DRAFT
+
+Status: message names and the `p_rel_m` / `q_rel` fields follow Leo's
+proposal of 2026-10-14; `gripper_delta` was added by Thomas. The App and
+`stub_server.py` implement it.
+
+The phone's 6-DoF pose comes from WebXR (`immersive-ar`, `local` reference
+space): XRViewer on iPhone, Chrome on Android. Moving the phone moves the
+end-effector, so IK drives the whole arm. Holding the control area is the
+clutch, exactly like the other held controls (one at a time; release, cancel,
+background, blur, disconnect, estop all end it).
+
+On press, send `pose_start`. The App records the phone position `p0` and
+attitude `q0`; the server should record the end-effector pose and gripper
+position at the same instant.
+
+```json
+{
+  "v": 1,
+  "type": "pose_start",
+  "ts": 1788940006000,
+  "seq": 60,
+  "payload": {
+    "frame": "webxr_local",
+    "rate_hz": 30,
+    "gain": 0.7,
+    "deadband_deg": 2.5,
+    "smoothing": 0.3
+  }
+}
+```
+
+`gain`, `deadband_deg`, and `smoothing` apply to **rotation only** (same
+processing as Orientation mode) and are sent for logging. Translation is sent
+raw; scaling is the server's job.
+
+While held, send `pose_update` about every 33 ms (30 Hz). It is also the
+keepalive (750 ms watchdog) and is not ACKed.
+
+```json
+{
+  "v": 1,
+  "type": "pose_update",
+  "ts": 1788940006033,
+  "seq": 61,
+  "payload": {
+    "p_rel_m": [0.1, 0.0, -0.2],
+    "q_rel": [0.0, 0.0, 0.0, 1.0],
+    "gripper_delta": 0.5
+  }
+}
+```
+
+- `p_rel_m` = `p − p0` in metres, in the WebXR `local` frame: x right, y up,
+  z back (toward the user). The frame is fixed when AR starts, with −z along
+  the direction the phone camera pointed then. The first update after a press
+  is `[0, 0, 0]`.
+- `q_rel` = `q0⁻¹ · q`, identical in meaning and processing to Orientation
+  mode's `q_rel` (phone axes at press time), so the wrist calibration carries
+  over.
+- `gripper_delta` ∈ [−1, 1]: thumb slide while holding, positive = up = open,
+  negative = down = close. Sliding 20% of the screen height is ±1. The server
+  adds it to the gripper position recorded at `pose_start` and clamps. It
+  stays at its last value until release.
+- The App stops (sends `pose_stop`) when tracking is lost or no pose arrives
+  for 300 ms, or when the phone moves faster than 0.8 m/s or 229°/s (COBALT's
+  threshold of 4 cm or 0.2 rad per 50 ms, e.g. a dropped phone).
+
+Server side (Leo, 2026-10-14): map `p_rel_m` to the base frame, apply position
+gain, workspace and speed limits, feed end-effector IK, keep the two-axis
+rotation mapping, and handle IK failure.
+
+On release send `pose_stop` with `{}` payload. ACKs follow the usual release
+sequence: `pose_stop_requested`, then the start's final ACK `pose_stopped`
+(or `pose_watchdog_timeout`).
+
+The stub adds `p_rel_m` directly to `ee_pos` (no frame alignment) and reports
+`orient_deg` and `gripper_delta` in `state` for debugging only.
+
 ## Step modes and current speeds
 
 | Control | fine | coarse |

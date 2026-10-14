@@ -5,6 +5,8 @@
 - jog_keepalive 不回；750 ms 沒 keepalive 就當 watchdog 逾時，回 start 的 ack
 - orient_start／orient_update／orient_stop：姿態模式，orient_update 同時當 keepalive；
   state 多帶 orient_deg（目前 q_rel 的轉角，度），方便看手機轉動有沒有送到
+- pose_start／pose_update／pose_stop：AR 模式，pose_update 同時當 keepalive；
+  ee_pos 直接加上 p_rel_m（不做座標對齊，只為了看得出有在動），state 也帶 orient_deg 與 gripper_delta
 - estop／estop_reset／reset_scene／mode：ack ok，estop 會反映在 state
 - 每 200 ms 廣播 state（ee_pos 依按住方向慢慢動）
 """
@@ -17,14 +19,21 @@ import time
 import websockets
 
 WATCHDOG_S = 0.75
-START_TYPES = {"jog_start", "joint_jog_start", "gripper_jog_start", "orient_start"}
+START_TYPES = {
+    "jog_start",
+    "joint_jog_start",
+    "gripper_jog_start",
+    "orient_start",
+    "pose_start",
+}
 STOP_OF = {
     "jog_stop": "jog",
     "joint_jog_stop": "joint_jog",
     "gripper_jog_stop": "gripper_jog",
     "orient_stop": "orient",
+    "pose_stop": "pose",
 }
-KEEPALIVE_TYPES = {"jog_keepalive", "orient_update"}
+KEEPALIVE_TYPES = {"jog_keepalive", "orient_update", "pose_update"}
 
 
 def now_ms():
@@ -44,6 +53,7 @@ SIM = {
     "step": "fine",
     "estop": False,
     "orient_deg": 0.0,
+    "gripper_delta": 0.0,
 }
 # 進行中的按住也跨連線共用：任一連線送 estop 都要停掉它，ack 回給發起的那條連線
 ACTIVE = {"cmd": None}  # cmd = {"ws", "seq", "kind", "payload", "last_keepalive"}
@@ -98,11 +108,15 @@ async def handle(ws):
                 )
             elif a and a["kind"] == "gripper_jog":
                 sim["gripper"] = a["payload"].get("action", "open")
-            elif a and a["kind"] == "orient":
+            elif a and a["kind"] in ("orient", "pose"):
                 q = a.get("q_rel") or [0, 0, 0, 1]
                 sim["orient_deg"] = round(
                     math.degrees(2 * math.atan2(math.hypot(*q[:3]), abs(q[3]))), 1
                 )
+                if a["kind"] == "pose":
+                    p_rel = a.get("p_rel_m") or [0, 0, 0]
+                    sim["ee"] = [e0 + d for e0, d in zip(a["ee0"], p_rel)]
+                    sim["gripper_delta"] = a.get("gripper_delta", 0.0)
             await ws.send(
                 envelope(
                     "state",
@@ -114,6 +128,7 @@ async def handle(ws):
                         "ik": "moving" if active() else "ok",
                         "estop": sim["estop"],
                         "orient_deg": sim["orient_deg"],
+                        "gripper_delta": sim["gripper_delta"],
                         "task_success": False,
                         "episode": 0,
                     },
@@ -143,6 +158,10 @@ async def handle(ws):
                     a["last_keepalive"] = time.monotonic()
                     if t == "orient_update" and a["kind"] == "orient":
                         a["q_rel"] = p.get("q_rel")
+                    elif t == "pose_update" and a["kind"] == "pose":
+                        a["q_rel"] = p.get("q_rel")
+                        a["p_rel_m"] = p.get("p_rel_m")
+                        a["gripper_delta"] = p.get("gripper_delta", 0.0)
             elif t in START_TYPES:
                 if sim["estop"]:
                     await ack(seq, "rejected", "estop_active")
@@ -155,6 +174,7 @@ async def handle(ws):
                         "kind": t[:-6],
                         "payload": p,
                         "last_keepalive": time.monotonic(),
+                        "ee0": list(sim["ee"]),
                     }
             elif t in STOP_OF:
                 await ack(seq, "ok", f"{STOP_OF[t]}_stop_requested")
