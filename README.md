@@ -58,6 +58,8 @@
 
 ## 對接 Leo 的 server（取代 stub）
 
+姿態模式與 HTTPS 轉接的對接、Leo 自己測試的步驟：[docs/handoff-leo.md](docs/handoff-leo.md)
+
 Leo 的 WebSocket server 起在跑 Isaac Sim 的那台機器上。對接當天：
 
 1. 跟 Leo 要兩個資訊：那台機器的區網 IP 與 server port。
