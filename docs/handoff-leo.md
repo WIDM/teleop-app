@@ -19,6 +19,7 @@ iPhone Safari ─https/wss─▶ 你的 Mac：serve_https.py（:8443）─ws─�
 - 只多了 `serve_https.py` 這一層，跑在你的 Mac 上，跟 relay 同一台。它也是透明轉發，訊息原封不動，所以 **relay 不用改**。
 - 要改的是 Isaac Sim 那端（真正處理訊息、算 IK 的地方）：收 `v=1`、處理 `orient_*`。
 - relay 只收一條手機連線，從 relay 看來，`serve_https.py` 就是那一條。
+- 這張圖是照 [hold-protocol.md](hold-protocol.md)「Mac relay 是透明轉發」那段推斷的。實際架構不一樣的話（例如 relay 不在 Mac 上、port 不是 8765），請告訴 Thomas，下面的啟動指令要跟著改。
 
 ## 手機要裝什麼
 
