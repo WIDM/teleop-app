@@ -4,6 +4,8 @@
 
 分支：`claude/elegant-hopper-shmlgp`，還沒併進 `main`。
 
+**畫面改版（2026-10-14）**：改成一頁不捲動，按鈕／陀螺儀／AR 三個分頁一次只顯示一種；急停固定在最下方；姿態參數與訊息紀錄收進「⚙ 設定」。協定與行為都沒變。
+
 ## 第二輪（2026-10-14 晚）：AR 模式 `pose_*`，回應你的測試回報
 
 你提的 `pose_start`／`pose_update`／`pose_stop` 已經照你的格式做進 App，`git pull` 就拿得到。完整格式見 [hold-protocol.md](hold-protocol.md) 的「Pose (WebXR AR) mode — DRAFT」一節。
@@ -21,13 +23,13 @@
 - **App 端自動停**（送 `pose_stop`）：追蹤遺失或 300 ms 沒有新姿態；手機突然動得比 0.8 m/s 或 229°/s 快（門檻同 COBALT，例如手機掉落）；AR 被結束。
 - AR 畫面上有急停、解除急停、結束 AR 三顆按鈕，不用離開 AR 就能急停和解除。
 
-**手機怎麼開：** iPhone 用 **XRViewer** 開 `https://<你Mac IP>:8443/`（同一個網址，不是 `xr-test.html`），連線後按「進入 AR 模式」。Safari 沒有 WebXR AR，所以 AR 模式一定要用 XRViewer；按鈕模式和陀螺儀模式照舊用 Safari 就好。
+**手機怎麼開：** iPhone 用 **XRViewer** 開 `https://<你Mac IP>:8443/`（同一個網址，不是 `xr-test.html`），連線後切到「AR」分頁按「進入 AR」。Safari 沒有 WebXR AR，所以 AR 模式一定要用 XRViewer；按鈕模式和陀螺儀模式照舊用 Safari 就好。
 
 **你的鏈路多了 SSH tunnel :8766 也沒關係**：`serve_https.py` 只要能連到你的 relay（:8765）就好，後面怎麼接都不影響。
 
 **AR 模式驗收：**
 
-- [ ] XRViewer 開頁面，「進入 AR 模式」可以按，按下去看到相機畫面和控制區
+- [ ] XRViewer 開頁面，「AR」分頁的「進入 AR」可以按，按下去看到相機畫面和控制區
 - [ ] 按住控制區、手機往前移 10 cm，手臂末端也往前移（方向對不對要你校正）
 - [ ] 按住時拇指上下滑，夾爪會開、會關
 - [ ] 放開就停；按住時按 AR 畫面上的急停，立刻停，不再收到 `pose_update`
@@ -128,10 +130,10 @@ Isaac Sim 那邊還沒改好之前，可以先把 relay 和 Isaac Sim 換成 `py
 
 - [ ] 送 `hello` 收到 `welcome`，右上角變「可操作」（代表 `v=1` 通了）
 - [ ] 按住方向鍵：`jog_start`、keepalive、`jog_stop` 和兩個 ack 都正常（這是既有功能的回歸測試）
-- [ ] 按「啟用陀螺儀」並允許，紫色鈕的小字變成「就緒，按住才生效」
+- [ ] 切到「陀螺儀」分頁，按「啟用陀螺儀」並允許，按鈕換成紫色的「按住轉手機」，小字是「就緒，按住才生效」
 - [ ] 按住紫色鈕轉手機，手臂轉向會跟著動；放開就停
 - [ ] 按住紫色鈕時按急停，手臂立刻停，之後不再收到 `orient_update`
 - [ ] 按住時把 App 切到背景，750 ms 內停止
-- [ ] 想看每一則 `orient_update`：在「訊息紀錄與測試」勾「顯示高頻訊息」
+- [ ] 想看每一則 `orient_update`：在「⚙ 設定」裡勾「顯示高頻訊息」
 
-有問題的話，把「訊息紀錄與測試」的畫面截圖，連同你 server 的 log 一起傳給 Thomas。
+有問題的話，把「⚙ 設定」裡訊息紀錄的畫面截圖，連同你 server 的 log 一起傳給 Thomas。

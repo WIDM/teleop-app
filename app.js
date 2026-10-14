@@ -1,6 +1,6 @@
 // app.js：手機端遙操作 App 的全部邏輯，單一檔案。
 //
-// 讀法：照下面十個區塊的順序讀，每一區開頭都有一段白話說明。
+// 讀法：照下面十一個區塊的順序讀，每一區開頭都有一段白話說明。
 //   1. 信封工具        每則訊息共用的外層格式
 //   2. 連線狀態與閘門  三種連線狀態、什麼時候才允許按方向鍵
 //   3. 畫面與紀錄      狀態列、按鈕啟停、訊息紀錄
@@ -11,6 +11,7 @@
 //   8. 按鈕綁定        把上面的機制接到畫面上的每一顆按鈕
 //   9. 姿態模式（IMU） 按住「姿態」鈕時，用手機轉動控制末端轉向
 //  10. AR 模式（WebXR）按住控制區時，手機移動帶動整隻手臂，拇指上下滑控制夾爪
+//  11. 畫面模式與設定 三個分頁一次只顯示一種；設定收在對話框裡
 //
 // 兩條主線貫穿全檔，讀的時候盯著這兩條走：
 //   連線生命週期：開頁 → 按連線 → onopen 送 hello → 收 welcome → 收 state → 閘門打開
@@ -96,6 +97,7 @@ function updateButtons() {
   $("arEstopResetBtn").disabled = !(connected && estopActive === true);
   $("estopBtn").disabled = !connected;
   $("estopResetBtn").disabled = !(connected && estopActive === true);
+  $("estopResetBtn").hidden = !(connected && estopActive === true); // 急停中才出現
   const gate = $("gate");
   if (!connected) gate.textContent = "未連線";
   else if (!welcomed) gate.textContent = "等 welcome";
@@ -115,6 +117,7 @@ function setState(next) {
       [STATE.CONNECTED]: "connected",
       [STATE.RECONNECTING]: "reconnecting",
     }[next];
+  $("conn").open = next !== STATE.CONNECTED; // 連上就收起連線設定，斷線再展開
   if (next !== STATE.CONNECTED) {
     welcomed = false;
     estopActive = null;
@@ -622,8 +625,8 @@ async function enableSensor() {
     window.addEventListener("deviceorientation", onDeviceOrientation);
   }
   sensor.enabled = true;
-  $("sensorBtn").textContent = "陀螺儀已啟用";
-  $("sensorBtn").disabled = true;
+  $("sensorBtn").hidden = true; // 拿到權限後，「啟用」鈕換成「按住轉手機」
+  $("orientBtn").hidden = false;
   showOrientInfo("等感測器資料…");
   updateButtons();
 }
@@ -708,7 +711,7 @@ async function checkXrSupport() {
   }
   $("arSupport").textContent = xr.supported
     ? "這個瀏覽器支援"
-    : "這個瀏覽器不支援（iPhone 用 XRViewer 開，Android 用 Chrome）";
+    : "這個瀏覽器不支援，見下方說明";
   updateButtons();
 }
 
@@ -860,6 +863,40 @@ $("arEstopResetBtn").onclick = () =>
 $("arExitBtn").onclick = () => xr.session?.end();
 $("arStartBtn").onclick = startAR;
 checkXrSupport();
+
+// ===== 11. 畫面模式與設定：一次只顯示一種控制 =====
+// 按鈕、陀螺儀、AR 三個分頁；有 data-modes 的區塊只在列出的模式顯示。記住上次用的分頁。
+// 切分頁時若正按住，先結束按住（送 stop），不讓看不見的按鈕繼續控制。
+const MODES = ["buttons", "gyro", "ar"];
+
+function setMode(mode) {
+  if (!MODES.includes(mode)) mode = "buttons";
+  if (hold) endHold({ reason: "切換模式，已送 stop" });
+  document.querySelectorAll(".tab").forEach((t) => {
+    const on = t.dataset.tab === mode;
+    t.classList.toggle("active", on);
+    t.setAttribute("aria-selected", String(on));
+  });
+  document.querySelectorAll("[data-modes]").forEach((el) => {
+    el.hidden = !el.dataset.modes.split(" ").includes(mode);
+  });
+  try {
+    localStorage.setItem("mode", mode);
+  } catch {}
+}
+
+document
+  .querySelectorAll(".tab")
+  .forEach((t) => (t.onclick = () => setMode(t.dataset.tab)));
+let savedMode = null;
+try {
+  savedMode = localStorage.getItem("mode");
+} catch {}
+setMode(savedMode);
+
+// 設定（姿態參數、訊息紀錄）收在全螢幕對話框裡，平常不佔畫面
+$("settingsBtn").onclick = () => $("settings").showModal();
+$("settingsCloseBtn").onclick = () => $("settings").close();
 
 updateModeBtn();
 setState(STATE.DISCONNECTED);
