@@ -294,10 +294,14 @@ keepalive (750 ms watchdog) and is not ACKed.
 - `q_rel` = `q0⁻¹ · q`, identical in meaning and processing to Orientation
   mode's `q_rel` (phone axes at press time), so the wrist calibration carries
   over.
-- `gripper_delta` ∈ [−1, 1]: thumb slide while holding, positive = up = open,
-  negative = down = close. Sliding 20% of the screen height is ±1. The server
-  adds it to the gripper position recorded at `pose_start` and clamps. It
-  stays at its last value until release.
+- `gripper_delta` ∈ [−1, 1]: while the clutch is held, holding the AR
+  screen's "夾爪 開" button ramps it up at 1.0 per second, "夾爪 關" ramps it
+  down (±1 = fully open / fully closed); releasing the button keeps the value.
+  The server adds it to the gripper position recorded at `pose_start` and
+  clamps. (Changed 2026-10-15 from a thumb slide, which was hard to use.)
+- When the clutch is *not* held, the AR gripper buttons send the ordinary
+  `gripper_jog_start` / `gripper_jog_stop`, so only one held control is ever
+  active.
 - The App stops (sends `pose_stop`) when tracking is lost or no pose arrives
   for 300 ms, or when the phone moves faster than 0.8 m/s or 229°/s (COBALT's
   threshold of 4 cm or 0.2 rad per 50 ms, e.g. a dropped phone).

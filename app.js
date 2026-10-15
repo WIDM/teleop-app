@@ -88,10 +88,16 @@ function updateButtons() {
   $("testBtn").disabled = !connected;
   const motion = motionAllowed();
   document
-    .querySelectorAll(".hold, .mode, #resetSceneBtn")
+    .querySelectorAll(".hold, .mode")
     .forEach((b) => (b.disabled = !motion));
+  // 重置場景不受急停限制：急停後常要先重置場景才能解除，由 server 決定收不收
+  $("resetSceneBtn").disabled = !(connected && welcomed);
+  $("arResetSceneBtn").disabled = !(connected && welcomed);
   $("orientBtn").disabled = !motion || !sensor.enabled;
   $("arClutch").disabled = !motion || !xr.session;
+  document
+    .querySelectorAll(".ar-grip-btn")
+    .forEach((b) => (b.disabled = !motion || !xr.session));
   $("arStartBtn").disabled = !xr.supported || !!xr.session;
   $("arEstopBtn").disabled = !connected;
   $("arEstopResetBtn").disabled = !(connected && estopActive === true);
@@ -681,7 +687,9 @@ $("sensorBtn").onclick = enableSensor;
 //   每 33 ms 送 pose_update（兼 keepalive）：
 //     p_rel_m        p − p0，公尺，WebXR local 座標（x 右、y 上、z 朝後，以進入 AR 時手機的朝向為準）
 //     q_rel          q0⁻¹·q，跟姿態模式同一個定義與處理（死區、增益、平滑沿用姿態參數）
-//     gripper_delta  按住時拇指上滑為正（開）、下滑為負（關），滑螢幕高度 20% 就是 ±1
+//     gripper_delta  按住控制區的同時按住 AR 畫面下方的夾爪鈕：開＝每秒 +1、關＝每秒 −1，
+//                    範圍 −1 到 1（±1＝全開／全關），放開夾爪鈕就停在當下的值
+//   沒按住控制區時，夾爪鈕就是一般的 gripper_jog（跟按鈕模式一樣），維持「一次只有一個按住」
 //   座標對到手臂、位移倍率、工作空間與速度限制、IK 失敗處理都由 server 做（Leo 2026-10-14）。
 // 另外三種情況也算失去控制，走 endHold 送 stop：追蹤遺失或 300 ms 沒新姿態、手機突然動太快
 // （門檻同 COBALT：每 50 ms 超過 4 cm 或 0.2 rad，例如手機掉落）、AR 被結束。
@@ -689,10 +697,10 @@ const POSE_INTERVAL_MS = 33;
 const POSE_STALE_MS = 300;
 const MAX_SPEED_MPS = 0.04 / 0.05;
 const MAX_ANG_SPEED_DPS = 0.2 / 0.05 / D2R;
-const GRIP_FULL_SWIPE = 0.2;
+const GRIP_RATE_PER_S = 1.0;
 
 let xr = { supported: false, session: null, pose: null, t: 0 }; // pose：{p 公尺, q xyzw}
-let arHold = null; // 按住中：{p0, q0, out, params, grip, y0, last}
+let arHold = null; // 按住中：{p0, q0, out, params, grip, gripDir, gripPointer, gripT, last}
 
 function showArInfo(text) {
   $("arInfo").textContent = text;
@@ -784,7 +792,9 @@ function canStartAr() {
     out: IDENTITY,
     params: readOrientParams(),
     grip: 0,
-    y0: null,
+    gripDir: 0,
+    gripPointer: null,
+    gripT: performance.now(),
     last: { p: xr.pose.p, q: xr.pose.q, t: xr.t },
   };
   return true;
@@ -810,6 +820,14 @@ function arTick() {
     }
     arHold.last = { p, q, t: xr.t };
   }
+  const now = performance.now();
+  if (arHold.gripDir) {
+    const g =
+      arHold.grip +
+      (arHold.gripDir * GRIP_RATE_PER_S * (now - arHold.gripT)) / 1000;
+    arHold.grip = Math.max(-1, Math.min(1, g));
+  }
+  arHold.gripT = now;
   const p_rel_m = p.map((v, i) => Number((v - arHold.p0[i]).toFixed(4)));
   const target = shapeRel(qMul(qConj(arHold.q0), q), arHold.params);
   arHold.out = qSlerp(arHold.out, target, 1 - arHold.params.smoothing);
@@ -833,21 +851,43 @@ bindHold(
     intervalMs: POSE_INTERVAL_MS,
     onEnd: () => {
       arHold = null;
+      document
+        .querySelectorAll(".ar-grip-btn")
+        .forEach((b) => b.classList.remove("held"));
       $("arReadout").textContent = "";
       if (xr.session) showArInfo(poseFresh() ? "已放開" : "追蹤中斷");
     },
   },
 );
 
-// 拇指滑夾爪：只認開始按住的那根手指；上滑為正（開）
-arClutch.addEventListener("pointerdown", (e) => {
-  if (arHold && hold && hold.btn === arClutch) arHold.y0 = e.clientY;
-});
-arClutch.addEventListener("pointermove", (e) => {
-  if (!arHold || arHold.y0 === null || !hold || e.pointerId !== hold.pointerId)
-    return;
-  const d = (arHold.y0 - e.clientY) / (window.innerHeight * GRIP_FULL_SWIPE);
-  arHold.grip = Math.max(-1, Math.min(1, d));
+// AR 夾爪鈕：按住控制區時，第二指按夾爪鈕只改 gripper_delta 的變化方向，不另開按住；
+// 沒按住控制區時，交給下面的 bindHold 當一般 gripper_jog。這個監聽要比 bindHold 先註冊。
+document.querySelectorAll(".ar-grip-btn").forEach((btn) => {
+  const dir = btn.dataset.action === "open" ? 1 : -1;
+  btn.addEventListener("pointerdown", (e) => {
+    if (btn.disabled || !arHold) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    arHold.gripDir = dir;
+    arHold.gripPointer = e.pointerId;
+    btn.classList.add("held");
+    try {
+      btn.setPointerCapture(e.pointerId);
+    } catch {}
+  });
+  const release = (e) => {
+    if (!arHold || e.pointerId !== arHold.gripPointer) return;
+    arHold.gripDir = 0;
+    arHold.gripPointer = null;
+    btn.classList.remove("held");
+  };
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach((t) =>
+    btn.addEventListener(t, release),
+  );
+  bindHold(btn, "gripper_jog_start", "gripper_jog_stop", () => ({
+    action: btn.dataset.action,
+    step: currentStep,
+  }));
 });
 
 // 點 overlay 上的按鈕不要被 WebXR 當成在 AR 場景裡點擊
@@ -860,6 +900,8 @@ $("arEstopBtn").addEventListener("pointerdown", (e) => {
 });
 $("arEstopResetBtn").onclick = () =>
   sendTracked($("arEstopResetBtn"), "estop_reset", {});
+$("arResetSceneBtn").onclick = () =>
+  sendTracked($("arResetSceneBtn"), "reset_scene", {});
 $("arExitBtn").onclick = () => xr.session?.end();
 $("arStartBtn").onclick = startAR;
 checkXrSupport();

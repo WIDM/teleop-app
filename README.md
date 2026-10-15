@@ -61,8 +61,8 @@
 同一個頁面的「AR」分頁，用支援 WebXR AR 的瀏覽器開才會亮起「進入 AR」：iPhone 用 XRViewer，Android 用 Chrome（Safari 沒有 WebXR AR）。啟動方式同姿態模式（`serve_https.py`），手機開 `https://<電腦IP>:8443/`，連線後切到「AR」分頁按「進入 AR」。
 
 - 按住控制區：手機移動，手臂末端跟著動（IK 帶動整隻手臂）；放開即停
-- 按住時拇指往上滑＝夾爪開、往下滑＝夾爪關（滑螢幕高度 20% 為全開或全關）
-- AR 畫面上有急停、解除急停、結束 AR
+- 夾爪用 AR 畫面下方的「夾爪 開／關」鈕：按住控制區時可以用另一指同時按（1 秒從不動到全開或全關）；沒按住控制區時就是一般的夾爪按住控制
+- AR 畫面上有急停、解除急停、重置場景、結束 AR；重置場景在急停中也能按（主畫面也是），收不收由 server 決定
 - 追蹤遺失、手機突然動太快（例如掉落）、AR 被結束都會自動送 `pose_stop`
 - 協定：`pose_start`／`pose_update`／`pose_stop`，見 [docs/hold-protocol.md](docs/hold-protocol.md) 的 Pose 一節
 

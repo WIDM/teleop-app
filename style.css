@@ -501,6 +501,16 @@ button.flash-bad {
 .ar-clutch:disabled {
   background: rgba(42, 42, 42, 0.6);
 }
+.ar-grip {
+  flex: 0 0 auto;
+  height: 84px;
+}
+.ar-grip-btn {
+  background: rgba(15, 118, 110, 0.85);
+}
+.ar-grip-btn:disabled {
+  background: rgba(42, 42, 42, 0.6);
+}
 .ar-clutch.held {
   background: rgba(14, 116, 144, 0.7);
 }

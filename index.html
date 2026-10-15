@@ -114,7 +114,7 @@
           進入 AR<small id="arSupport">檢查中…</small>
         </button>
         <p class="hint">
-          按住畫面：手機移動帶動整隻手臂；拇指上滑開夾爪、下滑關。iPhone 請用
+          按住畫面：手機移動帶動整隻手臂；夾爪用畫面下方的按鈕。iPhone 請用
           XRViewer 開這頁，Android 用 Chrome。
         </p>
       </section>
@@ -195,14 +195,25 @@
         <button id="arEstopResetBtn" class="estop-reset" disabled>
           解除急停
         </button>
+        <button id="arResetSceneBtn" class="secondary" disabled>
+          重置場景
+        </button>
         <button id="arExitBtn" class="secondary">結束 AR</button>
       </div>
       <button id="arEstopBtn" class="estop">急停 STOP</button>
       <button id="arClutch" class="hold ar-clutch" disabled>
         按住：手機移動帶動手臂
-        <small>按住時拇指往上滑＝夾爪開，往下滑＝夾爪關</small>
+        <small>夾爪用下方按鈕，可以跟這裡同時按</small>
         <small id="arReadout"></small>
       </button>
+      <div class="row ar-grip">
+        <button class="hold ar-grip-btn" data-action="open" disabled>
+          夾爪 開
+        </button>
+        <button class="hold ar-grip-btn" data-action="close" disabled>
+          夾爪 關
+        </button>
+      </div>
     </div>
 
     <script src="app.js"></script>
