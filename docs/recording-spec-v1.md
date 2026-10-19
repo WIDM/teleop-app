@@ -1,6 +1,6 @@
 # Recording Spec v1（D-5）
 
-狀態：Draft for Leo／Thomas review｜更新：2026-10-19
+狀態：Leo 實錄驗證完成，等待 Thomas review｜更新：2026-10-19
 
 ## 目的與範圍
 
@@ -73,3 +73,20 @@ LeRobot `action`。
 3. Source HDF5 通過欄位、shape、30 Hz、時間遞增、非空影像與 metadata 驗證。
 4. 轉成 LeRobot 後 readback：上述五個 key 存在，frame 數一致，`action.shape=[N,6]`。
 5. 只有完成第 2–4 項後，D-5 才能標為完成；規格與本機單元測試本身不等於實錄證據。
+
+
+## D-5 實錄驗證證據（Leo，2026-10-19）
+
+- 輸入模式：`buttons`
+- Session：`d5-buttons-20261019-002`
+- Episode：`demo_0`（metadata `episode_id=1`）
+- Source HDF5：`/root/Documents/robotics/data/demos/d5_buttons_20261019_002.hdf5`
+- 成功條件：`S4 PICK_PLACE SUCCESS`，穩定 30 steps
+- HDF5 驗證：`episodes=1`、`samples=380`、`fps=30`、RGB `640x480`
+- D-5 metadata 驗證：`mode=buttons`，通過
+- LeRobot 輸出：`/root/Documents/robotics/data/lerobot/d5_buttons_20261019_002`
+- LeRobot readback：`frames=380`、state `(6,)`、EE pose `(7,)`、image `(3,480,640)`、action `(6,)`
+
+實錄、Source HDF5 驗證、LeRobot 轉換與 readback 均已通過。D-5 現僅待
+Thomas review 本規格並合併 PR；HDF5 與 LeRobot dataset 保留於 RTXWS，不提交至
+App repository。
