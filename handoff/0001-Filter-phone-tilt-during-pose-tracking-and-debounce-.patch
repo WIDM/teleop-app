@@ -1,0 +1,476 @@
+From 9b4e667f7294a3345dbdab60ce2fa02c6650e67f Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Thu, 22 Oct 2026 14:34:20 +0000
+Subject: [PATCH] Filter phone tilt during pose tracking and debounce safety
+ estop.
+
+Pose updates were applying hand rotation 1:1 onto the wrist while the three-joint IK chased the gripper, so a shaky translation slewed diagonally and tripped the 10 cm estop. Yaw no longer maps into the wrist, pose tilt below 8 degrees is ignored, and tracking error must persist for 15 steps before estop.
+---
+ output/s4_pick_place/s4_sim_pick_place.py  | 113 ++++++++++++++-------
+ output/s4_pick_place/s4_task_logic.py      | 105 +++++++++++++++++++
+ output/s4_pick_place/test_s4_task_logic.py |  81 +++++++++++++++
+ 3 files changed, 263 insertions(+), 36 deletions(-)
+
+diff --git a/output/s4_pick_place/s4_sim_pick_place.py b/output/s4_pick_place/s4_sim_pick_place.py
+index f4348ab..c4a1e9f 100644
+--- a/output/s4_pick_place/s4_sim_pick_place.py
++++ b/output/s4_pick_place/s4_sim_pick_place.py
+@@ -27,7 +27,8 @@
+         -> reset_episode()
+         -> 最後再看各種 command_kind 的細節
+ 
+-本次加入的是教學註解，不改變原有控制流程與參數。
++姿態模式會把手機傾斜先做死區與平滑，再下到手腕；追蹤誤差要連續
++超過門檻才急停。平移軸的實測校正維持不變。
+ """
+ 
+ import argparse
+@@ -45,9 +46,11 @@ from pathlib import Path
+ from a3_transport import Bridge, STEP_METERS
+ from s4_task_logic import (
+     StableSuccess,
++    advance_tracking_safety,
+     map_webxr_translation_to_tool_heading,
+     quaternion_xyzw_to_rotation_vector,
+     success_sample,
++    wrist_joint_deltas_rad,
+ )
+ 
+ # Isaac Lab 載入 LeIsaac SO-101 asset 前，需要先知道 asset 根目錄。
+@@ -196,7 +199,9 @@ DLS_LAMBDA = 0.05
+ # 每個 physics step 最多只允許單一 IK 關節改變 0.01 rad，避免瞬間跳動。
+ MAX_JOINT_DELTA_RAD = 0.01
+ # 若「命令末端位置」與「實際末端位置」相差超過 10 cm，視為危險並 Estop。
++# 單一步超過門檻不夠：手腕一動，三關節 IK 會落後一拍。要連續多步才急停。
+ SAFETY_COMMAND_ERROR_M = 0.10
++TRACKING_SAFETY_CONFIRM_STEPS = 15
+ # 所有 Cartesian 命令都限制在初始 EE 位置周圍半徑 8 cm 的盒狀工作區。
+ WORKSPACE_RADIUS_M = 0.08
+ AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+@@ -221,14 +226,18 @@ JOG_CARRY_SPEED_M_S = {"fine": 0.030, "coarse": 0.060}
+ GRIPPER_JOG_SPEED_DEG_S = {"fine": 90.0, "coarse": 180.0}
+ GRIPPER_JOG_CLOSE_SPEED_DEG_S = {"fine": 30.0, "coarse": 60.0}
+ # IMU 姿態模式先做受限的兩軸映射：手機 x 軸旋轉控 wrist_flex，
+-# 手機 y 軸旋轉控 wrist_roll，z 軸先忽略。這些上限是單次按住相對於
+-# 起始關節角的額外限制，關節本身的 soft limit 仍會再夾一次。
++# 手機 y 軸旋轉控 wrist_roll，z 軸（手機平轉）不進手腕。這些上限是單次
++# 按住相對於起始關節角的額外限制，關節本身的 soft limit 仍會再夾一次。
+ # XRViewer live calibration: pitching the phone upward should flex the wrist
+ # upward.  Roll keeps its previously calibrated sign.
+ ORIENT_FLEX_SIGN = 1.0
+ ORIENT_ROLL_SIGN = -1.0
+ ORIENT_MAX_FLEX_DELTA_DEG = 35.0
+ ORIENT_MAX_ROLL_DELTA_DEG = 60.0
++# pose 同時帶平移和傾斜。手持平移很難低於幾度，這個下限蓋過 client
++# 較小的 deadband，避免手抖被 1:1 加成手腕後把夾爪甩斜。
++POSE_TILT_DEADBAND_FLOOR_DEG = 8.0
++POSE_TILT_SMOOTHING_FLOOR = 0.6
+ # After direction calibration, use a 1:1 phone-to-EE position gain.  The
+ # workspace still clamps every axis to +/-8 cm around the initial pose.
+ POSE_POSITION_GAIN = 1.00
+@@ -1020,6 +1029,8 @@ def main():
+     gripper_jog_speed_deg_s = None
+     orient_start_joint_pos = None
+     orient_last_q_rel = [0.0, 0.0, 0.0, 1.0]
++    orient_smoothed_flex_rad = 0.0
++    orient_smoothed_roll_rad = 0.0
+     orient_was_clamped = False
+     pose_start_ee_pos_b = None
+     pose_command_ee_pos_b = None
+@@ -1028,6 +1039,10 @@ def main():
+     pose_tool_forward_xy = (0.0, -1.0)
+     pose_last_p_rel_m = [0.0, 0.0, 0.0]
+     pose_last_q_rel = [0.0, 0.0, 0.0, 1.0]
++    pose_smoothed_flex_rad = 0.0
++    pose_smoothed_roll_rad = 0.0
++    pose_safety_streak = 0
++    jog_safety_streak = 0
+     pose_last_gripper_delta = 0.0
+     pose_was_workspace_clamped = False
+     pose_was_joint_clamped = False
+@@ -1493,6 +1508,7 @@ def main():
+                 command_frame = payload.get("frame", "base")
+                 jog_start_ee_pos_b = current_ee_pos_b.clone()
+                 jog_command_ee_pos_b = current_ee_pos_b.clone()
++                jog_safety_streak = 0
+                 carrying = bridge.state_snapshot()["gripper"] == "close"
+                 jog_speed_m_s = (
+                     JOG_CARRY_SPEED_M_S[step_name]
+@@ -1514,6 +1530,7 @@ def main():
+                 direction = payload["dir"]
+                 step_name = payload["step"]
+                 command_frame = payload.get("frame", "base")
++                jog_safety_streak = 0
+                 requested_delta_m = direction * STEP_METERS[step_name]
+                 tolerance_m = PASS_ERROR_M[step_name]
+                 trajectory_steps = math.ceil(
+@@ -1612,6 +1629,8 @@ def main():
+                 ].clone()
+                 full_joint_target[:, orient_joint_ids] = orient_start_joint_pos
+                 orient_last_q_rel = [0.0, 0.0, 0.0, 1.0]
++                orient_smoothed_flex_rad = 0.0
++                orient_smoothed_roll_rad = 0.0
+                 orient_was_clamped = False
+                 bridge.update_state(ik="orienting", orient_deg=0.0)
+                 print(
+@@ -1656,6 +1675,9 @@ def main():
+                 full_joint_target[:, gripper_joint_id] = held_gripper_target
+                 pose_last_p_rel_m = [0.0, 0.0, 0.0]
+                 pose_last_q_rel = [0.0, 0.0, 0.0, 1.0]
++                pose_smoothed_flex_rad = 0.0
++                pose_smoothed_roll_rad = 0.0
++                pose_safety_streak = 0
+                 pose_last_gripper_delta = 0.0
+                 pose_was_workspace_clamped = False
+                 pose_was_joint_clamped = False
+@@ -1855,20 +1877,28 @@ def main():
+             rotation_vector = quaternion_xyzw_to_rotation_vector(
+                 pose_last_q_rel
+             )
+-            flex_delta_rad = max(
+-                -math.radians(ORIENT_MAX_FLEX_DELTA_DEG),
+-                min(
+-                    math.radians(ORIENT_MAX_FLEX_DELTA_DEG),
+-                    ORIENT_FLEX_SIGN * rotation_vector[0],
++            # 平移和傾斜在同一則 pose 裡。手抖低於下限時不轉手腕，
++            # 否則三關節 IK 會追著被手腕甩開的夾爪，走出很大的斜線。
++            flex_delta_rad, roll_delta_rad = wrist_joint_deltas_rad(
++                pose_last_q_rel,
++                gain=float(payload["gain"]),
++                deadband_deg=max(
++                    float(payload["deadband_deg"]),
++                    POSE_TILT_DEADBAND_FLOOR_DEG,
+                 ),
+-            )
+-            roll_delta_rad = max(
+-                -math.radians(ORIENT_MAX_ROLL_DELTA_DEG),
+-                min(
+-                    math.radians(ORIENT_MAX_ROLL_DELTA_DEG),
+-                    ORIENT_ROLL_SIGN * rotation_vector[1],
++                smoothing=max(
++                    float(payload["smoothing"]),
++                    POSE_TILT_SMOOTHING_FLOOR,
+                 ),
+-            )
++                previous_flex_rad=pose_smoothed_flex_rad,
++                previous_roll_rad=pose_smoothed_roll_rad,
++                flex_sign=ORIENT_FLEX_SIGN,
++                roll_sign=ORIENT_ROLL_SIGN,
++                max_flex_deg=ORIENT_MAX_FLEX_DELTA_DEG,
++                max_roll_deg=ORIENT_MAX_ROLL_DELTA_DEG,
++            )
++            pose_smoothed_flex_rad = flex_delta_rad
++            pose_smoothed_roll_rad = roll_delta_rad
+             requested_orient_target = pose_start_orient_joint_pos + torch.tensor(
+                 [[flex_delta_rad, roll_delta_rad]],
+                 device=robot.device,
+@@ -1976,10 +2006,13 @@ def main():
+                 pose_command_ee_pos_b - final_ee_pos_b,
+                 dim=1,
+             )[0].item()
+-            if (
+-                not math.isfinite(command_error_m)
+-                or command_error_m > SAFETY_COMMAND_ERROR_M
+-            ):
++            pose_safety_tripped, pose_safety_streak = advance_tracking_safety(
++                command_error_m,
++                SAFETY_COMMAND_ERROR_M,
++                pose_safety_streak,
++                TRACKING_SAFETY_CONFIRM_STEPS,
++            )
++            if pose_safety_tripped:
+                 bridge.update_state(ik="no_solution")
+                 bridge.finish(active, "rejected", "pose_tracking_safety_stop")
+                 bridge.engage_estop()
+@@ -1987,7 +2020,8 @@ def main():
+                 print(
+                     f"[S4 POSE REJECT] seq={active['seq']} "
+                     "reason=pose_tracking_safety_stop "
+-                    f"tracking_error_m={command_error_m}",
++                    f"tracking_error_m={command_error_m} "
++                    f"streak={pose_safety_streak}",
+                     flush=True,
+                 )
+                 active = None
+@@ -2088,20 +2122,20 @@ def main():
+                 continue
+             orient_last_q_rel = latest_q_rel
+             rotation_vector = quaternion_xyzw_to_rotation_vector(latest_q_rel)
+-            flex_delta_rad = max(
+-                -math.radians(ORIENT_MAX_FLEX_DELTA_DEG),
+-                min(
+-                    math.radians(ORIENT_MAX_FLEX_DELTA_DEG),
+-                    ORIENT_FLEX_SIGN * rotation_vector[0],
+-                ),
+-            )
+-            roll_delta_rad = max(
+-                -math.radians(ORIENT_MAX_ROLL_DELTA_DEG),
+-                min(
+-                    math.radians(ORIENT_MAX_ROLL_DELTA_DEG),
+-                    ORIENT_ROLL_SIGN * rotation_vector[1],
+-                ),
+-            )
++            flex_delta_rad, roll_delta_rad = wrist_joint_deltas_rad(
++                latest_q_rel,
++                gain=float(payload["gain"]),
++                deadband_deg=float(payload["deadband_deg"]),
++                smoothing=float(payload["smoothing"]),
++                previous_flex_rad=orient_smoothed_flex_rad,
++                previous_roll_rad=orient_smoothed_roll_rad,
++                flex_sign=ORIENT_FLEX_SIGN,
++                roll_sign=ORIENT_ROLL_SIGN,
++                max_flex_deg=ORIENT_MAX_FLEX_DELTA_DEG,
++                max_roll_deg=ORIENT_MAX_ROLL_DELTA_DEG,
++            )
++            orient_smoothed_flex_rad = flex_delta_rad
++            orient_smoothed_roll_rad = roll_delta_rad
+             requested_orient_target = orient_start_joint_pos + torch.tensor(
+                 [[flex_delta_rad, roll_delta_rad]],
+                 device=robot.device,
+@@ -2645,14 +2679,21 @@ def main():
+         command_error_m = torch.linalg.vector_norm(
+             command_ee_pos_b - final_ee_pos_b, dim=1
+         )[0].item()
+-        if not math.isfinite(command_error_m) or command_error_m > SAFETY_COMMAND_ERROR_M:
++        jog_safety_tripped, jog_safety_streak = advance_tracking_safety(
++            command_error_m,
++            SAFETY_COMMAND_ERROR_M,
++            jog_safety_streak,
++            TRACKING_SAFETY_CONFIRM_STEPS,
++        )
++        if jog_safety_tripped:
+             bridge.update_state(ik="no_solution")
+             bridge.finish(active, "rejected", "tracking_safety_stop")
+             bridge.engage_estop()
+             full_joint_target = robot.data.joint_pos.clone()
+             print(
+                 f"[A3 REJECT] seq={active['seq']} reason=tracking_safety_stop "
+-                f"tracking_error_m={command_error_m}",
++                f"tracking_error_m={command_error_m} "
++                f"streak={jog_safety_streak}",
+                 flush=True,
+             )
+             active = None
+diff --git a/output/s4_pick_place/s4_task_logic.py b/output/s4_pick_place/s4_task_logic.py
+index ef1034c..9ef71dd 100644
+--- a/output/s4_pick_place/s4_task_logic.py
++++ b/output/s4_pick_place/s4_task_logic.py
+@@ -32,6 +32,111 @@ def quaternion_xyzw_to_rotation_vector(q_rel):
+     return (x * scale, y * scale, z * scale)
+ 
+ 
++def quaternion_xyzw_to_xyz_euler(q_rel):
++    """Intrinsic XYZ Euler angles ``(roll, pitch, yaw)`` in radians.
++
++    Roll is about X and becomes wrist flex.  Pitch is about Y and becomes
++    wrist roll.  Yaw is returned only so callers can drop it: rotating the
++    phone flat in the hand must not lift the gripper.
++    """
++    if len(q_rel) != 4 or not all(math.isfinite(value) for value in q_rel):
++        raise ValueError("q_rel must contain four finite values")
++    x, y, z, w = (float(value) for value in q_rel)
++    norm = math.sqrt(x * x + y * y + z * z + w * w)
++    if norm < 1.0e-9:
++        raise ValueError("q_rel norm is zero")
++    x, y, z, w = x / norm, y / norm, z / norm, w / norm
++    # q and -q are the same orientation; keep the shorter arc.
++    if w < 0.0:
++        x, y, z, w = -x, -y, -z, -w
++    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
++    sin_pitch = 2.0 * (w * y - z * x)
++    if sin_pitch >= 1.0:
++        pitch = math.pi / 2.0
++    elif sin_pitch <= -1.0:
++        pitch = -math.pi / 2.0
++    else:
++        pitch = math.asin(sin_pitch)
++    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
++    return (roll, pitch, yaw)
++
++
++def _soft_deadband(value, deadband):
++    """Drop ``|value| <= deadband``, then shift so motion starts at zero."""
++    if not math.isfinite(deadband) or deadband < 0.0:
++        raise ValueError("deadband must be finite and non-negative")
++    magnitude = abs(value)
++    if magnitude <= deadband:
++        return 0.0
++    return math.copysign(magnitude - deadband, value)
++
++
++def wrist_joint_deltas_rad(
++    q_rel,
++    *,
++    gain,
++    deadband_deg,
++    smoothing,
++    previous_flex_rad,
++    previous_roll_rad,
++    flex_sign=1.0,
++    roll_sign=-1.0,
++    max_flex_deg=35.0,
++    max_roll_deg=60.0,
++):
++    """Map a relative phone quaternion to wrist_flex and wrist_roll radians.
++
++    ``gain``, ``deadband_deg`` and ``smoothing`` are the values accepted on
++    ``orient_start`` / ``pose_start``.  Smoothing is the weight kept from the
++    previous output.  The returned pair is already deadbanded, smoothed and
++    clamped, so the simulator can store it and pass it back next step.
++    """
++    if not math.isfinite(gain) or gain < 0.0:
++        raise ValueError("gain must be a finite non-negative number")
++    if not math.isfinite(smoothing) or not 0.0 <= smoothing <= 0.95:
++        raise ValueError("smoothing must be finite and within [0, 0.95]")
++    if not all(
++        math.isfinite(value) for value in (previous_flex_rad, previous_roll_rad)
++    ):
++        raise ValueError("previous wrist deltas must be finite")
++    if not all(math.isfinite(value) for value in (flex_sign, roll_sign)):
++        raise ValueError("signs must be finite")
++    if not all(
++        math.isfinite(value) and value >= 0.0
++        for value in (deadband_deg, max_flex_deg, max_roll_deg)
++    ):
++        raise ValueError("limits and deadband must be finite and non-negative")
++    x_rad, y_rad, _yaw_rad = quaternion_xyzw_to_xyz_euler(q_rel)
++    deadband_rad = math.radians(deadband_deg)
++    flex = _soft_deadband(flex_sign * gain * x_rad, deadband_rad)
++    roll = _soft_deadband(roll_sign * gain * y_rad, deadband_rad)
++    flex = smoothing * previous_flex_rad + (1.0 - smoothing) * flex
++    roll = smoothing * previous_roll_rad + (1.0 - smoothing) * roll
++    flex = max(-math.radians(max_flex_deg), min(math.radians(max_flex_deg), flex))
++    roll = max(-math.radians(max_roll_deg), min(math.radians(max_roll_deg), roll))
++    return (flex, roll)
++
++
++def advance_tracking_safety(error_m, limit_m, streak, confirm_steps):
++    """Count consecutive tracking-error samples and say when to estop.
++
++    One sample past ``limit_m`` is not enough: wrist motion and a slow IK
++    step can spike the gripper error without the operator having run away.
++    Returns ``(tripped, streak)``.
++    """
++    if confirm_steps < 1:
++        raise ValueError("confirm_steps must be positive")
++    if not math.isfinite(limit_m) or limit_m <= 0.0:
++        raise ValueError("limit_m must be a positive finite number")
++    if not isinstance(streak, int) or streak < 0:
++        raise ValueError("streak must be a non-negative integer")
++    if not math.isfinite(error_m) or error_m > limit_m:
++        streak += 1
++    else:
++        streak = 0
++    return streak >= confirm_steps, streak
++
++
+ def map_webxr_translation_to_base(p_rel_m, gain=1.0):
+     """Map XRViewer translation into the current S4 robot base frame.
+ 
+diff --git a/output/s4_pick_place/test_s4_task_logic.py b/output/s4_pick_place/test_s4_task_logic.py
+index 30dff0f..6cddbbe 100644
+--- a/output/s4_pick_place/test_s4_task_logic.py
++++ b/output/s4_pick_place/test_s4_task_logic.py
+@@ -3,11 +3,14 @@ import unittest
+ 
+ from s4_task_logic import (
+     StableSuccess,
++    advance_tracking_safety,
+     inside_goal,
+     map_webxr_translation_to_base,
+     map_webxr_translation_to_tool_heading,
+     quaternion_xyzw_to_rotation_vector,
++    quaternion_xyzw_to_xyz_euler,
+     success_sample,
++    wrist_joint_deltas_rad,
+ )
+ 
+ 
+@@ -79,6 +82,84 @@ class S4TaskLogicTests(unittest.TestCase):
+         with self.assertRaises(ValueError):
+             quaternion_xyzw_to_rotation_vector((0.0, 0.0, 0.0, 0.0))
+ 
++    def test_euler_keeps_yaw_out_of_flex_and_roll(self):
++        yaw = math.radians(40.0)
++        roll, pitch, yaw_out = quaternion_xyzw_to_xyz_euler((
++            0.0,
++            0.0,
++            math.sin(yaw / 2.0),
++            math.cos(yaw / 2.0),
++        ))
++        self.assertAlmostEqual(roll, 0.0)
++        self.assertAlmostEqual(pitch, 0.0)
++        self.assertAlmostEqual(yaw_out, yaw)
++
++    def test_pose_tilt_inside_deadband_does_not_move_the_wrist(self):
++        angle = math.radians(5.0)
++        flex, roll = wrist_joint_deltas_rad(
++            (math.sin(angle / 2.0), 0.0, 0.0, math.cos(angle / 2.0)),
++            gain=1.0,
++            deadband_deg=8.0,
++            smoothing=0.0,
++            previous_flex_rad=0.2,
++            previous_roll_rad=-0.2,
++        )
++        self.assertEqual((flex, roll), (0.0, 0.0))
++
++    def test_wrist_deadband_smoothing_and_yaw_isolation(self):
++        tilt = math.radians(20.0)
++        flex, roll = wrist_joint_deltas_rad(
++            (math.sin(tilt / 2.0), 0.0, 0.0, math.cos(tilt / 2.0)),
++            gain=1.0,
++            deadband_deg=8.0,
++            smoothing=0.5,
++            previous_flex_rad=0.0,
++            previous_roll_rad=0.0,
++        )
++        self.assertAlmostEqual(flex, 0.5 * math.radians(12.0))
++        self.assertAlmostEqual(roll, 0.0)
++
++        yaw = math.radians(35.0)
++        flex, roll = wrist_joint_deltas_rad(
++            (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)),
++            gain=1.0,
++            deadband_deg=0.0,
++            smoothing=0.0,
++            previous_flex_rad=0.0,
++            previous_roll_rad=0.0,
++        )
++        self.assertAlmostEqual(flex, 0.0, places=6)
++        self.assertAlmostEqual(roll, 0.0, places=6)
++
++        side = math.radians(20.0)
++        _flex, roll = wrist_joint_deltas_rad(
++            (0.0, math.sin(side / 2.0), 0.0, math.cos(side / 2.0)),
++            gain=1.0,
++            deadband_deg=8.0,
++            smoothing=0.0,
++            previous_flex_rad=0.0,
++            previous_roll_rad=0.0,
++            roll_sign=-1.0,
++        )
++        self.assertAlmostEqual(roll, -math.radians(12.0))
++
++    def test_tracking_safety_requires_consecutive_samples(self):
++        tripped, streak = advance_tracking_safety(0.11, 0.10, 0, 3)
++        self.assertFalse(tripped)
++        self.assertEqual(streak, 1)
++        tripped, streak = advance_tracking_safety(0.20, 0.10, streak, 3)
++        self.assertFalse(tripped)
++        tripped, streak = advance_tracking_safety(0.05, 0.10, streak, 3)
++        self.assertFalse(tripped)
++        self.assertEqual(streak, 0)
++        streak = 0
++        for _ in range(2):
++            tripped, streak = advance_tracking_safety(float("nan"), 0.10, streak, 3)
++            self.assertFalse(tripped)
++        tripped, streak = advance_tracking_safety(0.11, 0.10, streak, 3)
++        self.assertTrue(tripped)
++        self.assertEqual(streak, 3)
++
+     def test_webxr_translation_mapping(self):
+         self.assertEqual(
+             map_webxr_translation_to_base((0.10, 0.20, 0.30), gain=0.5),
+-- 
+2.43.0
+
