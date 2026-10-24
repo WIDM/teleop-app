@@ -870,6 +870,10 @@ document.querySelectorAll(".ar-grip-btn").forEach((btn) => {
     e.stopImmediatePropagation();
     arHold.gripDir = dir;
     arHold.gripPointer = e.pointerId;
+    // 開、關同時按時後按的接手，先按的那顆不再控制，也不能再亮
+    document
+      .querySelectorAll(".ar-grip-btn")
+      .forEach((b) => b.classList.remove("held"));
     btn.classList.add("held");
     try {
       btn.setPointerCapture(e.pointerId);
