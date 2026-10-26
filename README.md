@@ -1,9 +1,7 @@
 # teleop-app
 
-> Leo 本機測試分支（2026-10-25）：AR 頁面新增「平移／手腕」明確切換。
-> 目前啟動、部署與測試請看 [explicit_v2 說明](../s4_pick_place/EXPLICIT_AR_MODES_20261025.md)。
-> 此副本基於 Thomas 的 App；下方保留原說明，其中 stub_server.py 與 docs/ 不包含在這份副本。
-> 此版需搭配同一快照的 S4 Server；HTTPS relay 連到 Mac SSH tunnel，無需另外啟動 8765 relay。
+> 此版需搭配 S4 Server：LEO5166888/Teleopration_SO-101 `de8cc55` 或更新的版本。
+> AR 頁面有「平移／手腕」兩種明確模式。
 
 手機語音遙操作碩論的 Web App 前端（Thomas）。連線狀態、WebSocket client、信封格式（介面協定 v0）、按住才動的控制（六方向、手腕、夾爪）、急停與解除、ack 回饋。
 
@@ -53,7 +51,7 @@
 手機只在 HTTPS 頁面給陀螺儀資料，而 HTTPS 頁面又不能連 `ws://`，所以這個模式改用 `serve_https.py`：同一個 port 8443 同時給頁面和 `wss://…/relay`，relay 把訊息原封不動轉給後面的 server。需要 `websockets` 13 以上。
 
 1. 終端機 1：`python3 stub_server.py`
-2. 終端機 2：`python3 serve_https.py`（轉給本機 stub）；要接 Leo 的 server 改成 `python3 serve_https.py --upstream ws://<Leo IP>:8765`
+2. 終端機 2：`python3 serve_https.py`（轉給本機 stub）；要接 S4 server（`de8cc55` 起）：先在 Mac 開 SSH tunnel，把本機 18766 轉到 server 的 `127.0.0.1:8766`，再跑 `python3 serve_https.py --upstream ws://127.0.0.1:18766`，不用另外啟動 8765 relay
 3. 手機開 `https://<電腦IP>:8443`，憑證警告按「仍要前往」（Safari：顯示詳細資訊 →「瀏覽此網站」）。server 欄會自動帶 `wss://<電腦IP>:8443/relay`，按連線
 4. 切到「陀螺儀」分頁，按「啟用陀螺儀」（iPhone 會跳權限詢問，按允許），按鈕換成「按住轉手機」，小字是「就緒，按住才生效」
 5. 按住「按住轉手機」再轉手機：小字顯示目前轉了幾度，stub 的 state 列顯示「姿態 N°」；放開即停
