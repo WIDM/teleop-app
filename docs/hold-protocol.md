@@ -161,6 +161,189 @@ Press and hold Open or Close:
 - Closing may stop automatically when contact is detected. The App must then
   clear its pressed state and stop sending keepalives.
 
+## Orientation (IMU) mode
+
+Status: proposed by Thomas 2026-10-13. The App, `stub_server.py`, and Leo's S4
+server (`de8cc55` or later) implement it.
+
+The phone controls end-effector **orientation only**. Translation stays on the
+jog buttons, because position integrated from a phone IMU drifts. Holding the
+"按住轉手機" button acts as a clutch: orientation is engaged only while held.
+It is a held control like the others: only one held control at a time, and
+every release, cancel, background, blur, disconnect, or estop ends it.
+
+On press, send `orient_start`. The App records the phone attitude `q0` at this
+instant; the server should record the end-effector attitude `e0` at the same
+time.
+
+```json
+{
+  "v": 1,
+  "type": "orient_start",
+  "ts": 1788940005000,
+  "seq": 50,
+  "payload": {
+    "frame": "phone_body",
+    "rate_hz": 30,
+    "gain": 0.7,
+    "deadband_deg": 2.5,
+    "smoothing": 0.3
+  }
+}
+```
+
+`gain`, `deadband_deg`, and `smoothing` are already applied by the App. They
+are sent so the server can log them as experiment parameters.
+
+While held, send `orient_update` about every 33 ms (30 Hz). It also serves as
+the keepalive: no `jog_keepalive` is sent in this mode, and the 750 ms
+watchdog applies to `orient_update`. The App does not wait for ACKs and the
+server should not ACK updates.
+
+```json
+{
+  "v": 1,
+  "type": "orient_update",
+  "ts": 1788940005033,
+  "seq": 51,
+  "payload": {"q_rel": [0.1672, 0.0, 0.0, 0.98592]}
+}
+```
+
+- `q_rel` is a unit quaternion `[x, y, z, w]` equal to `q0⁻¹ · q`: the
+  rotation since the press, expressed in the phone's own axes at press time
+  (W3C DeviceOrientation: x to the screen's right, y to the screen's top, z out
+  of the screen). The first update after a press is the identity.
+- The App has already applied deadband, gain, and exponential smoothing.
+- The App stops and sends `orient_stop` if the phone sensor produces no data
+  for 300 ms.
+
+Server side (proposal):
+
+- Target attitude: `e_target = e0 · R · q_rel · R⁻¹`, where `R` is a fixed
+  rotation aligning phone axes to the robot base frame.
+- SO-101 has 5 joints, so project the 3-axis rotation: pitch → `wrist_flex`,
+  roll → `wrist_roll`, yaw → ignored for now (or base rotation). The
+  projection rule goes in the thesis.
+- If IK fails, hold the last reachable pose and report it in `state.ik`.
+
+On release send `orient_stop` with `{}` payload. ACKs follow the same release
+sequence as the jog buttons: the stop's ACK (`orient_stop_requested`), then
+the start's final ACK (`orient_stopped`, or `orient_watchdog_timeout`).
+
+The stub additionally reports `orient_deg` (the rotation angle of the latest
+`q_rel`) in `state` for debugging. It is not part of the proposed contract.
+
+## Pose (WebXR AR) mode
+
+Status: message names and the `p_rel_m` / `q_rel` fields follow Leo's
+proposal of 2026-10-14; `gripper_delta` was added by Thomas; `control_mode`
+was added with the explicit AR modes (2026-10-25). The App and Leo's S4 server
+(LEO5166888/Teleopration_SO-101 `de8cc55` or later) implement it.
+`stub_server.py` accepts the messages but ignores `control_mode`.
+
+The phone's 6-DoF pose comes from WebXR (`immersive-ar`, `local` reference
+space): XRViewer on iPhone, Chrome on Android. Holding the control area is the
+clutch, exactly like the other held controls (one at a time; release, cancel,
+background, blur, disconnect, estop all end it).
+
+The AR screen has two explicit control modes. The user picks one before
+pressing, and it stays fixed for the whole press:
+
+- `translation`: moving the phone moves the end-effector position. Phone
+  rotation is ignored. The AR gripper buttons work during the press.
+- `wrist`: tilting the phone drives `wrist_flex` only. Phone translation and
+  the gripper are ignored; the AR gripper buttons are disabled while a wrist
+  press is held.
+
+Switching mode during a press ends the press (sends `pose_stop`) and does not
+restart it, even if the finger is still down. The user must press again, and
+the new press sends a new `pose_start` with the new mode.
+
+On press, send `pose_start`. The App records the phone position `p0` and
+attitude `q0`; the server should record the end-effector pose and gripper
+position at the same instant.
+
+```json
+{
+  "v": 1,
+  "type": "pose_start",
+  "ts": 1788940006000,
+  "seq": 60,
+  "payload": {
+    "frame": "webxr_local",
+    "rate_hz": 30,
+    "control_mode": "translation",
+    "gain": 0.7,
+    "deadband_deg": 2.5,
+    "smoothing": 0.3
+  }
+}
+```
+
+`control_mode` is `translation` or `wrist`. Servers at `de8cc55` or later
+treat a missing `control_mode` as `translation`. Older servers reject a
+`pose_start` that carries it, so this App needs `de8cc55` or later.
+
+`gain`, `deadband_deg`, and `smoothing` apply to **rotation only** (same
+processing as Orientation mode), so they matter only in `wrist` mode. They are
+sent for logging. Translation is sent raw; scaling is the server's job.
+
+While held, send `pose_update` about every 33 ms (30 Hz). It is also the
+keepalive (750 ms watchdog) and is not ACKed.
+
+```json
+{
+  "v": 1,
+  "type": "pose_update",
+  "ts": 1788940006033,
+  "seq": 61,
+  "payload": {
+    "p_rel_m": [0.1, 0.0, -0.2],
+    "q_rel": [0.0, 0.0, 0.0, 1.0],
+    "gripper_delta": 0.5
+  }
+}
+```
+
+- `p_rel_m` = `p − p0` in metres, raw WebXR `local` coordinates. The App does
+  not interpret the axes. The first update after a press is `[0, 0, 0]`. In
+  `wrist` mode it is always `[0, 0, 0]`.
+- `q_rel` = `q0⁻¹ · q` after deadband, gain, and smoothing. In `translation`
+  mode it is always the identity `[0, 0, 0, 1]`.
+- `gripper_delta` ∈ [−1, 1], `translation` mode only (always `0` in `wrist`
+  mode): while the clutch is held, holding the AR screen's "夾爪 開" button
+  ramps it up at 1.0 per second, "夾爪 關" ramps it down (±1 = fully open /
+  fully closed); releasing the button keeps the value. The server adds it to
+  the gripper position recorded at `pose_start` and clamps. (Changed
+  2026-10-15 from a thumb slide, which was hard to use.)
+- When the clutch is *not* held, the AR gripper buttons send the ordinary
+  `gripper_jog_start` / `gripper_jog_stop`, so only one held control is ever
+  active.
+- The App stops (sends `pose_stop`) when tracking is lost or no pose arrives
+  for 300 ms, or when the phone moves faster than 0.8 m/s or 229°/s (COBALT's
+  threshold of 4 cm or 0.2 rad per 50 ms, e.g. a dropped phone).
+
+Server side (S4 server `de8cc55`):
+
+- Mapping WebXR coordinates to the robot base frame is done on the server and
+  calibrated per device. The App sends `p_rel_m` raw.
+- `translation` mode maps `p_rel_m` to the end-effector position and ignores
+  rotation.
+- `wrist` mode drives `wrist_flex` only.
+- `reset_scene` also clears emergency stop on this server.
+- If `pose_update` stops arriving during a press (missed keepalive), the
+  server stops the hold without engaging emergency stop. A WebSocket
+  disconnect still engages emergency stop.
+
+On release send `pose_stop` with `{}` payload. ACKs follow the usual release
+sequence: `pose_stop_requested`, then the start's final ACK `pose_stopped`
+(or `pose_watchdog_timeout`).
+
+The stub adds `p_rel_m` directly to `ee_pos` (no frame alignment) and reports
+`orient_deg` and `gripper_delta` in `state` for debugging only. Unlike the S4
+server, the stub keeps emergency stop active after `reset_scene`.
+
 ## Step modes and current speeds
 
 | Control | fine | coarse |
