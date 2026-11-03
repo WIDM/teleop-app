@@ -3,27 +3,45 @@
 - hello 回 welcome，test 原樣 echo
 - *_start：記住 seq，放開（*_stop）時先回 stop 的 ack，再回 start 的最終 ack
 - jog_keepalive 不回；750 ms 沒 keepalive 就當 watchdog 逾時，回 start 的 ack
+- 也支援 orient_*（姿態）與 pose_*（AR）：*_update 兼 keepalive、不回 ack；不看 control_mode
 - estop／estop_reset／reset_scene／mode：ack ok，estop 會反映在 state
-- 每 200 ms 廣播 state（ee_pos 依按住方向慢慢動）
+- 每 200 ms 廣播 state（ee_pos 依按住方向慢慢動；pose 時是 ee0 + p_rel_m，
+  另附除錯用的 orient_deg、gripper_delta）
 """
 
 import asyncio
 import json
+import math
 import time
 
 import websockets
 
 WATCHDOG_S = 0.75
-START_TYPES = {"jog_start", "joint_jog_start", "gripper_jog_start"}
+START_TYPES = {
+    "jog_start",
+    "joint_jog_start",
+    "gripper_jog_start",
+    "orient_start",
+    "pose_start",
+}
 STOP_OF = {
     "jog_stop": "jog",
     "joint_jog_stop": "joint_jog",
     "gripper_jog_stop": "gripper_jog",
+    "orient_stop": "orient",
+    "pose_stop": "pose",
 }
+UPDATE_OF = {"orient_update": "orient", "pose_update": "pose"}
+KEEPALIVE_KINDS = {"jog", "joint_jog", "gripper_jog"}  # 由 jog_keepalive 續命的 hold
 
 
 def now_ms():
     return int(time.time() * 1000)
+
+
+def rotation_deg(q):
+    """單位四元數 [x, y, z, w] 的旋轉角（度，小數一位）。"""
+    return round(math.degrees(2 * math.acos(min(1.0, abs(q[3])))), 1)
 
 
 def envelope(type_, seq, payload):
@@ -36,6 +54,7 @@ def envelope(type_, seq, payload):
 SIM = {"ee": [0.02, -0.14, 0.16], "gripper": "open", "step": "fine", "estop": False}
 # 進行中的按住也跨連線共用：任一連線送 estop 都要停掉它，ack 回給發起的那條連線
 ACTIVE = {"cmd": None}  # cmd = {"ws", "seq", "kind", "payload", "last_keepalive"}
+# orient／pose 另有 "update"（最近一次 *_update 的 payload）；pose 再加 "ee0"
 
 
 async def send_ack(ws, seq, status, reason):
@@ -87,21 +106,26 @@ async def handle(ws):
                 )
             elif a and a["kind"] == "gripper_jog":
                 sim["gripper"] = a["payload"].get("action", "open")
-            await ws.send(
-                envelope(
-                    "state",
-                    0,
-                    {
-                        "ee_pos": sim["ee"],
-                        "gripper": sim["gripper"],
-                        "step": sim["step"],
-                        "ik": "moving" if active() else "ok",
-                        "estop": sim["estop"],
-                        "task_success": False,
-                        "episode": 0,
-                    },
+            elif a and a["kind"] == "pose":
+                d = a["update"].get("p_rel_m", [0.0, 0.0, 0.0])
+                sim["ee"] = [e + v for e, v in zip(a["ee0"], d)]  # 不做座標對齊
+            state = {
+                "ee_pos": sim["ee"],
+                "gripper": sim["gripper"],
+                "step": sim["step"],
+                "ik": "moving" if active() else "ok",
+                "estop": sim["estop"],
+                "task_success": False,
+                "episode": 0,
+            }
+            a = active()
+            if a and a["kind"] in UPDATE_OF.values():  # 除錯欄位，不屬正式 contract
+                state["orient_deg"] = rotation_deg(
+                    a["update"].get("q_rel", [0.0, 0.0, 0.0, 1.0])
                 )
-            )
+                if a["kind"] == "pose":
+                    state["gripper_delta"] = a["update"].get("gripper_delta", 0.0)
+            await ws.send(envelope("state", 0, state))
 
     tasks = [asyncio.create_task(broadcaster()), asyncio.create_task(watchdog())]
     try:
@@ -118,25 +142,35 @@ async def handle(ws):
                 )
             elif t == "test":
                 await ws.send(raw)
-            elif t == "jog_keepalive":
+            elif t == "jog_keepalive" or t in UPDATE_OF:
+                renews = KEEPALIVE_KINDS if t == "jog_keepalive" else {UPDATE_OF[t]}
                 a = mine()
+                if a and a["kind"] not in renews:
+                    a = None  # orient／pose 只認自己的 *_update，jog_keepalive 不幫它們續命
                 if a and time.monotonic() - a["last_keepalive"] > WATCHDOG_S:
                     await finish_active(f"{a['kind']}_watchdog_timeout")  # 晚到的 keepalive 不能續命
                 elif a:
                     a["last_keepalive"] = time.monotonic()
+                    if t in UPDATE_OF:
+                        a["update"] = p
             elif t in START_TYPES:
                 if sim["estop"]:
                     await ack(seq, "rejected", "estop_active")
                 elif active():
                     await ack(seq, "rejected", "busy")
                 else:
-                    ACTIVE["cmd"] = {
+                    cmd = {
                         "ws": ws,
                         "seq": seq,
                         "kind": t[:-6],
                         "payload": p,
                         "last_keepalive": time.monotonic(),
                     }
+                    if cmd["kind"] in UPDATE_OF.values():
+                        cmd["update"] = {}
+                    if cmd["kind"] == "pose":
+                        cmd["ee0"] = list(sim["ee"])  # control_mode 不處理
+                    ACTIVE["cmd"] = cmd
             elif t in STOP_OF:
                 await ack(seq, "ok", f"{STOP_OF[t]}_stop_requested")
                 if mine():
