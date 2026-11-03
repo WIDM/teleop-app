@@ -161,6 +161,22 @@ Press and hold Open or Close:
 - Closing may stop automatically when contact is detected. The App must then
   clear its pressed state and stop sending keepalives.
 
+### Gripper set (one-shot, stub)
+
+Status: decided 2026-11-04 (short vol− press). Implemented in `stub_server.py`.
+
+```json
+{"v":1,"type":"gripper_set","ts":1788940002500,"seq":21,"payload":{"state":"closed"}}
+```
+
+- `state` is `open` or `closed`. Not a hold: no stop, no keepalive.
+- Accepted only when no hold is active and emergency stop is off. The single
+  ACK is `ok` / `gripper_updated`, and the next `state` reports the new
+  `gripper` value.
+- Rejections: `estop_active` during emergency stop, `busy` while any hold is
+  active (the hold is unaffected), `bad_payload` if `state` is missing or
+  invalid.
+
 ## Orientation (IMU) mode
 
 Status: proposed by Thomas 2026-10-13. The App, `stub_server.py`, and Leo's S4

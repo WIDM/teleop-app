@@ -5,6 +5,9 @@
 - jog_keepalive 不回；750 ms 沒 keepalive 就當 watchdog 逾時，回 start 的 ack
 - 也支援 orient_*（姿態）與 pose_*（AR）：*_update 兼 keepalive、不回 ack；不看 control_mode
 - estop／estop_reset／reset_scene／mode：ack ok，estop 會反映在 state
+- gripper_set {"state": "open"|"closed"}：單次指令（非 hold），立即設定夾爪並回
+  ok gripper_updated；急停中 rejected estop_active，有 hold 時 rejected busy，
+  state 不合法 rejected bad_payload
 - 每 200 ms 廣播 state（ee_pos 依按住方向慢慢動；pose 時是 ee0 + p_rel_m，
   另附除錯用的 orient_deg、gripper_delta）
 """
@@ -32,6 +35,7 @@ STOP_OF = {
     "pose_stop": "pose",
 }
 UPDATE_OF = {"orient_update": "orient", "pose_update": "pose"}
+GRIPPER_STATES = ("open", "closed")  # tuple：payload 的 state 可能是不可 hash 的值
 KEEPALIVE_KINDS = {"jog", "joint_jog", "gripper_jog"}  # 由 jog_keepalive 續命的 hold
 
 
@@ -188,6 +192,16 @@ async def handle(ws):
             elif t == "mode":
                 sim["step"] = p.get("step", "fine")
                 await ack(seq, "ok", "mode_updated")
+            elif t == "gripper_set":
+                if sim["estop"]:
+                    await ack(seq, "rejected", "estop_active")
+                elif active():
+                    await ack(seq, "rejected", "busy")  # 不動進行中的 hold
+                elif not isinstance(p, dict) or p.get("state") not in GRIPPER_STATES:
+                    await ack(seq, "rejected", "bad_payload")
+                else:
+                    sim["gripper"] = p["state"]
+                    await ack(seq, "ok", "gripper_updated")
             elif t in {"move_delta", "gripper"}:  # 舊的一次一步，向下相容
                 await ack(seq, "ok", "completed")
             else:
