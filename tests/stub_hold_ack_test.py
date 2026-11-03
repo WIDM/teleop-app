@@ -194,6 +194,7 @@ async def case_1_orient(c):
 
 async def pose_roundtrip(c, control_mode):
     P = [0.031, -0.052, 0.0735]
+    M = [0.0163, -0.0273, 0.0386]  # 0 → 50 mm → 95 mm：每步不超過 stub 的 60 mm 跳點門檻
     G = 0.4
     q = [0.0, 0.0, 0.0, 1.0] if control_mode == "translation" else [0.13, 0.0, 0.0, math.sqrt(1 - 0.13 ** 2)]
     ee0 = (await fresh_state(c))["ee_pos"]
@@ -206,6 +207,8 @@ async def pose_roundtrip(c, control_mode):
     def payload(i):
         if i == 0:
             return {"p_rel_m": [0, 0, 0], "q_rel": [0, 0, 0, 1], "gripper_delta": 0}
+        if i == 1:
+            return {"p_rel_m": M, "q_rel": q, "gripper_delta": G}
         return {"p_rel_m": P, "q_rel": q, "gripper_delta": G}
 
     streamer = asyncio.create_task(stream(c, "pose_update", payload, until=stop_streaming))
@@ -217,11 +220,12 @@ async def pose_roundtrip(c, control_mode):
     assert_release(c, mark, "pose", s_start, s_stop, ups)
 
     expected = [e + d for e, d in zip(ee0, P)]
+    midway = [e + d for e, d in zip(ee0, M)]
     hold_states = [m["payload"] for m in c.since(mark, "state") if m["payload"]["ik"] == "moving"]
     check(hold_states, "no state during pose hold")
     for st in hold_states:
-        check(close_to(st["ee_pos"], ee0) or close_to(st["ee_pos"], expected),
-              f"ee_pos {st['ee_pos']} is neither ee0 {ee0} nor ee0+p_rel_m {expected}")
+        check(any(close_to(st["ee_pos"], x) for x in (ee0, midway, expected)),
+              f"ee_pos {st['ee_pos']} is not ee0 {ee0}, ee0+M {midway} or ee0+p_rel_m {expected}")
         check("orient_deg" in st and "gripper_delta" in st, f"debug fields missing: {st}")
     final = [st for st in hold_states if close_to(st["ee_pos"], expected)]
     check(final, f"no hold state with ee_pos == ee0+p_rel_m {expected}: {hold_states}")

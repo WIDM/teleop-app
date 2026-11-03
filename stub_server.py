@@ -10,8 +10,14 @@
   state 不合法 rejected bad_payload
 - 每 200 ms 廣播 state（ee_pos 依按住方向慢慢動；pose 時是 ee0 + p_rel_m，
   另附除錯用的 orient_deg、gripper_delta）
+- pose_update 的目標 ee0 + p_rel_m 逐軸截在 workspace_min_m／workspace_max_m 上，
+  有截就回 ok pose_updated 且帶 clamped: true；沒截不回 ack（照舊）。
+  截完的目標離這次 hold 上一個採用的目標（第一筆則是 hold 開始時的 ee）超過
+  jump_threshold_m 就整筆丟掉，回 rejected jump，hold 不中斷
+- python stub_server.py --config cfg.json：JSON 可覆寫 CONFIG 的任一個鍵
 """
 
+import argparse
 import asyncio
 import json
 import math
@@ -38,6 +44,15 @@ UPDATE_OF = {"orient_update": "orient", "pose_update": "pose"}
 GRIPPER_STATES = ("open", "closed")  # tuple：payload 的 state 可能是不可 hash 的值
 KEEPALIVE_KINDS = {"jog", "joint_jog", "gripper_jog"}  # 由 jog_keepalive 續命的 hold
 
+# pose 的工作空間（base frame 絕對座標，xyz）與跳點門檻。
+# 暫定：真手臂的數字要等手臂規格實測後再填。x、y = stub 起始 ee [0.02, -0.14]
+# （reset_scene 的位置，從這裡開始的 hold 的 ee0）± 0.25 m；z 0.05–0.60 m。
+CONFIG = {
+    "workspace_min_m": [-0.23, -0.39, 0.05],  # 暫定
+    "workspace_max_m": [0.27, 0.11, 0.60],  # 暫定
+    "jump_threshold_m": 0.060,  # 預設照 Phone2Act
+}
+
 
 def now_ms():
     return int(time.time() * 1000)
@@ -58,13 +73,24 @@ def envelope(type_, seq, payload):
 SIM = {"ee": [0.02, -0.14, 0.16], "gripper": "open", "step": "fine", "estop": False}
 # 進行中的按住也跨連線共用：任一連線送 estop 都要停掉它，ack 回給發起的那條連線
 ACTIVE = {"cmd": None}  # cmd = {"ws", "seq", "kind", "payload", "last_keepalive"}
-# orient／pose 另有 "update"（最近一次 *_update 的 payload）；pose 再加 "ee0"
+# orient／pose 另有 "update"（最近一次採用的 *_update payload）；pose 再加 "ee0" 與
+# "target"（最近一次採用、截過的目標；hold 開始時 = ee0）
 
 
-async def send_ack(ws, seq, status, reason):
+def pose_target(ee0, p_rel):
+    """ee0 + p_rel 逐軸截進工作空間，回傳 (目標, 有沒有截)。"""
+    raw = [e + v for e, v in zip(ee0, p_rel)]  # 不做座標對齊
+    lo, hi = CONFIG["workspace_min_m"], CONFIG["workspace_max_m"]
+    target = [min(max(v, l), h) for v, l, h in zip(raw, lo, hi)]
+    return target, target != raw
+
+
+async def send_ack(ws, seq, status, reason, **extra):
     try:
         await ws.send(
-            envelope("ack", seq, {"seq": seq, "status": status, "reason": reason})
+            envelope(
+                "ack", seq, {"seq": seq, "status": status, "reason": reason, **extra}
+            )
         )
     except websockets.ConnectionClosed:
         pass
@@ -111,8 +137,7 @@ async def handle(ws):
             elif a and a["kind"] == "gripper_jog":
                 sim["gripper"] = a["payload"].get("action", "open")
             elif a and a["kind"] == "pose":
-                d = a["update"].get("p_rel_m", [0.0, 0.0, 0.0])
-                sim["ee"] = [e + v for e, v in zip(a["ee0"], d)]  # 不做座標對齊
+                sim["ee"] = list(a["target"])
             state = {
                 "ee_pos": sim["ee"],
                 "gripper": sim["gripper"],
@@ -154,8 +179,19 @@ async def handle(ws):
                 if a and time.monotonic() - a["last_keepalive"] > WATCHDOG_S:
                     await finish_active(f"{a['kind']}_watchdog_timeout")  # 晚到的 keepalive 不能續命
                 elif a:
-                    a["last_keepalive"] = time.monotonic()
-                    if t in UPDATE_OF:
+                    a["last_keepalive"] = time.monotonic()  # 被丟掉的跳點也算續命
+                    if t == "pose_update":
+                        target, clamped = pose_target(
+                            a["ee0"], p.get("p_rel_m", [0.0, 0.0, 0.0])
+                        )
+                        # 比截過的目標：手臂每次採用的移動量一定不超過門檻
+                        if math.dist(target, a["target"]) > CONFIG["jump_threshold_m"]:
+                            await ack(seq, "rejected", "jump")
+                        else:
+                            a["update"], a["target"] = p, target
+                            if clamped:
+                                await send_ack(ws, seq, "ok", "pose_updated", clamped=True)
+                    elif t in UPDATE_OF:
                         a["update"] = p
             elif t in START_TYPES:
                 if sim["estop"]:
@@ -174,6 +210,7 @@ async def handle(ws):
                         cmd["update"] = {}
                     if cmd["kind"] == "pose":
                         cmd["ee0"] = list(sim["ee"])  # control_mode 不處理
+                        cmd["target"] = list(sim["ee"])
                     ACTIVE["cmd"] = cmd
             elif t in STOP_OF:
                 await ack(seq, "ok", f"{STOP_OF[t]}_stop_requested")
@@ -216,10 +253,34 @@ async def handle(ws):
             ACTIVE["cmd"] = None
 
 
+def load_config(path):
+    with open(path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    if not isinstance(cfg, dict) or set(cfg) - set(CONFIG):
+        raise SystemExit(f"config: 只接受 {sorted(CONFIG)} 這些鍵：{cfg!r}")
+    CONFIG.update(cfg)
+    lo, hi = CONFIG["workspace_min_m"], CONFIG["workspace_max_m"]
+    for name in ("workspace_min_m", "workspace_max_m"):
+        v = CONFIG[name]
+        if not (isinstance(v, list) and len(v) == 3 and all(type(x) in (int, float) for x in v)):
+            raise SystemExit(f"config: {name} 要是 3 個數字 [x, y, z]：{v!r}")
+    if any(l > h for l, h in zip(lo, hi)):
+        raise SystemExit(f"config: workspace_min_m {lo} 有軸大於 workspace_max_m {hi}")
+    j = CONFIG["jump_threshold_m"]
+    if type(j) not in (int, float) or j <= 0:
+        raise SystemExit(f"config: jump_threshold_m 要是正數：{j!r}")
+
+
 async def main():
     async with websockets.serve(handle, "0.0.0.0", 8765):
         print("stub on ws://0.0.0.0:8765")
+        print(f"pose config: {json.dumps(CONFIG)}")
         await asyncio.Future()
 
 
+ap = argparse.ArgumentParser()
+ap.add_argument("--config", help="JSON：workspace_min_m、workspace_max_m、jump_threshold_m")
+args = ap.parse_args()
+if args.config:
+    load_config(args.config)
 asyncio.run(main())
