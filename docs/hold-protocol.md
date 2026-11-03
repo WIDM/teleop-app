@@ -161,6 +161,22 @@ Press and hold Open or Close:
 - Closing may stop automatically when contact is detected. The App must then
   clear its pressed state and stop sending keepalives.
 
+### Gripper set (one-shot, stub)
+
+Status: decided 2026-11-04 (short vol− press). Implemented in `stub_server.py`.
+
+```json
+{"v":1,"type":"gripper_set","ts":1788940002500,"seq":21,"payload":{"state":"closed"}}
+```
+
+- `state` is `open` or `closed`. Not a hold: no stop, no keepalive.
+- Accepted only when no hold is active and emergency stop is off. The single
+  ACK is `ok` / `gripper_updated`, and the next `state` reports the new
+  `gripper` value.
+- Rejections: `estop_active` during emergency stop, `busy` while any hold is
+  active (the hold is unaffected), `bad_payload` if `state` is missing or
+  invalid.
+
 ## Orientation (IMU) mode
 
 Status: proposed by Thomas 2026-10-13. The App, `stub_server.py`, and Leo's S4
@@ -290,7 +306,8 @@ processing as Orientation mode), so they matter only in `wrist` mode. They are
 sent for logging. Translation is sent raw; scaling is the server's job.
 
 While held, send `pose_update` about every 33 ms (30 Hz). It is also the
-keepalive (750 ms watchdog) and is not ACKed.
+keepalive (750 ms watchdog) and is not ACKed (the stub's clamp and jump ACKs
+are the exception; see below).
 
 ```json
 {
@@ -343,6 +360,45 @@ sequence: `pose_stop_requested`, then the start's final ACK `pose_stopped`
 The stub adds `p_rel_m` directly to `ee_pos` (no frame alignment) and reports
 `orient_deg` and `gripper_delta` in `state` for debugging only. Unlike the S4
 server, the stub keeps emergency stop active after `reset_scene`.
+
+### Workspace clamp and jump filter (stub)
+
+Status: decided 2026-11-04 05:44. Implemented in `stub_server.py`; the S4
+server does not have it yet.
+
+Parameters (`CONFIG` in `stub_server.py`, override any key with
+`python stub_server.py --config cfg.json`):
+
+| Key | Stub default (暫定, provisional) |
+|---|---|
+| `workspace_min_m` | `[-0.23, -0.39, 0.05]` |
+| `workspace_max_m` | `[0.27, 0.11, 0.60]` |
+| `jump_threshold_m` | `0.060` (Phone2Act) |
+
+The bounds are absolute `[x, y, z]` in the frame of `state.ee_pos`. The x and y
+defaults are ±0.25 m around the stub's start pose `[0.02, -0.14]` (the `ee0` of
+a hold started after launch or `reset_scene`); z is 0.05 to 0.60 m. Real-arm
+values come after the arm is measured. Because the stub does not align WebXR
+axes, phone up/down (WebXR y) moves `ee_pos` y, not z.
+
+For each `pose_update`, the target `ee0 + p_rel_m` is clamped per axis to the
+bounds. Then:
+
+- If the clamped target is more than `jump_threshold_m` from the previous
+  accepted (clamped) target of this hold, the whole update is dropped
+  (position, `q_rel`, `gripper_delta`) and ACKed `rejected` / `jump`. The hold
+  continues; the update still counts as a keepalive. The first update of a hold
+  is compared with the end-effector position at `pose_start`.
+- Otherwise it is applied. If any axis was clamped, it is ACKed `ok` /
+  `pose_updated` with `"clamped": true`. In-range updates stay un-ACKed, so
+  there is never a `"clamped": false`; treat a missing field as not clamped.
+
+Comparing clamped targets bounds every accepted step of the commanded
+position by the threshold. Moving along or past a boundary is not rejected.
+If a hold starts with `ee0` outside the bounds (for example after jogging z
+above 0.60), the clamped target can be farther than the threshold from `ee0`,
+and every update is rejected until the arm is jogged back or `reset_scene`.
+Stopping on fast phone motion is the App's job, not the stub's.
 
 ## Step modes and current speeds
 
