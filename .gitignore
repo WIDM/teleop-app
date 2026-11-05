@@ -1,3 +1,4 @@
 .cert/
 __pycache__/
 explicit_modes_preview.png
+node_modules/
