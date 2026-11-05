@@ -1,1 +1,0 @@
-const ciCheck = 1;
